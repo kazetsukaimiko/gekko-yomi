@@ -22,22 +22,30 @@ std::filesystem::path executable_directory() {
     return std::filesystem::path(buf).parent_path();
 }
 
-std::vector<std::string> plugin_directories() {
+std::vector<std::string> split_plugin_dirs(const char* value) {
     std::vector<std::string> dirs;
-    if (const char* env = std::getenv("GEKKO_YOMI_PLUGINS")) {
-        std::string rest(env);
-        while (!rest.empty()) {
-            const auto colon = rest.find(':');
-            const auto piece = rest.substr(0, colon);
-            if (!piece.empty()) {
-                dirs.push_back(piece);
-            }
-            if (colon == std::string::npos) {
-                break;
-            }
-            rest.erase(0, colon + 1);
+    std::string rest(value == nullptr ? "" : value);
+    while (!rest.empty()) {
+        const auto colon = rest.find(':');
+        const auto piece = rest.substr(0, colon);
+        if (!piece.empty()) {
+            dirs.push_back(piece);
         }
+        if (colon == std::string::npos) {
+            break;
+        }
+        rest.erase(0, colon + 1);
     }
+    return dirs;
+}
+
+std::vector<std::string> plugin_directories() {
+    // An explicit list replaces the defaults, including when it names one
+    // directory. Tests use that to load a fixture plugin and nothing else.
+    if (const char* env = std::getenv("GEKKO_YOMI_PLUGINS")) {
+        return split_plugin_dirs(env);
+    }
+    std::vector<std::string> dirs;
 
     const auto exe_dir = executable_directory();
     if (!exe_dir.empty()) {

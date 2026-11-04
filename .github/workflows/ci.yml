@@ -1,0 +1,46 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and test in Docker
+        run: docker build -t gekko-yomi-test -f docker/Dockerfile .
+
+  wayland:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install a headless compositor
+        run: sudo apt-get update && sudo apt-get install -y g++ cmake ninja-build pkg-config weston
+      - name: Build
+        run: cmake -S . -B build -G Ninja -DGEKKO_YOMI_BUILD_TESTS=ON && cmake --build build
+      - name: Run the Wayland-labeled scenarios
+        run: |
+          set -euo pipefail
+          runtime="${RUNNER_TEMP}/xdg"
+          mkdir -p "${runtime}"
+          chmod 700 "${runtime}"
+          export XDG_RUNTIME_DIR="${runtime}"
+          weston --backend=headless --socket=wayland-1 >/tmp/weston.log 2>&1 &
+          echo $! >/tmp/weston.pid
+          for _ in 1 2 3 4 5 6 7 8 9 10; do
+            if [ -S "${runtime}/wayland-1" ]; then
+              break
+            fi
+            sleep 0.5
+          done
+          if [ ! -S "${runtime}/wayland-1" ]; then
+            echo "headless weston did not create a socket" >&2
+            cat /tmp/weston.log >&2 || true
+            exit 1
+          fi
+          export WAYLAND_DISPLAY=wayland-1
+          ctest --test-dir build -L wayland --output-on-failure
+          kill "$(cat /tmp/weston.pid)" || true

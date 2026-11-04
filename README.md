@@ -12,4 +12,4 @@ cmake --build build
 ./build/gekko-yomi
 ```
 
-Plugins are shared libraries that export `gekko_yomi_register`. Put them in `GEKKO_YOMI_PLUGINS` (colon-separated directories), or in `plugins/` next to the executable.
+Plugins are shared libraries that export `gekko_yomi_register`. Put them in `plugins/` next to the executable, or in `../lib/gekko-yomi/plugins`. Set `GEKKO_YOMI_PLUGINS` to a colon-separated directory list to use those directories and no others.

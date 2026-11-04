@@ -18,7 +18,8 @@ public:
     Registry(const Registry&) = delete;
     Registry& operator=(const Registry&) = delete;
 
-    // GEKKO_YOMI_PLUGINS, then <exe>/plugins, then <exe>/../lib/gekko-yomi/plugins.
+    // If GEKKO_YOMI_PLUGINS is set, only those colon-separated directories.
+    // Otherwise <exe>/plugins, then <exe>/../lib/gekko-yomi/plugins.
     // A missing directory is skipped. A library that fails to load is recorded
     // in load_errors and the rest still load.
     void load();
