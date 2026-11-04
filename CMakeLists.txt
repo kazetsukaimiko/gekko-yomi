@@ -5,14 +5,16 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# The tray shell is a later component. The core and the web UI do not link Qt.
-# Turning this on is a hard error until that target exists, so a build that
-# asked for Qt cannot silently succeed without it.
-option(GEKKO_YOMI_QT_SHELL "Build the optional Qt6 tray and settings shell" OFF)
+# The tray and settings window is not in the tree yet, so the default is OFF
+# and turning it on is an error. When that target exists, flip this default
+# to ON. A normal build should include the Qt window. OFF stays available
+# for a core-only build. gekko_yomi_core itself never links Qt.
+option(GEKKO_YOMI_QT_SHELL "Build the Qt6 tray and settings window" OFF)
 if(GEKKO_YOMI_QT_SHELL)
     message(FATAL_ERROR
         "GEKKO_YOMI_QT_SHELL is not implemented yet. "
-        "Leave it OFF. The core builds without Qt.")
+        "Leave it OFF until the settings window lands. "
+        "The default becomes ON at that point.")
 endif()
 
 add_library(gekko_yomi_core
