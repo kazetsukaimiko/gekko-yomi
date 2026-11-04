@@ -33,6 +33,21 @@ add_executable(gekko-yomi src/app/main.cpp)
 target_compile_options(gekko-yomi PRIVATE -Wall -Wextra -Wpedantic)
 target_link_libraries(gekko-yomi PRIVATE gekko_yomi_core)
 
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(SYSTEMD REQUIRED IMPORTED_TARGET libsystemd)
+
+add_library(gekko_yomi_capture_kwin SHARED
+    plugins/capture_kwin/window_ref.cpp
+    plugins/capture_kwin/kwin_capture.cpp
+)
+target_link_libraries(gekko_yomi_capture_kwin PRIVATE gekko_yomi_core PkgConfig::SYSTEMD)
+target_compile_options(gekko_yomi_capture_kwin PRIVATE -Wall -Wextra -Wpedantic)
+set_target_properties(gekko_yomi_capture_kwin PROPERTIES
+    LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/plugins
+    OUTPUT_NAME capture_kwin
+    PREFIX ""
+)
+
 option(GEKKO_YOMI_BUILD_TESTS "Build unit tests" ON)
 if(GEKKO_YOMI_BUILD_TESTS)
     enable_testing()
@@ -54,11 +69,12 @@ if(GEKKO_YOMI_BUILD_TESTS)
         PREFIX ""
     )
 
-    add_executable(gekko-yomi-tests tests/tests.cpp)
+    add_executable(gekko-yomi-tests tests/tests.cpp plugins/capture_kwin/window_ref.cpp)
+    target_include_directories(gekko-yomi-tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/plugins/capture_kwin)
     target_link_libraries(gekko-yomi-tests PRIVATE gekko_yomi_core)
     target_compile_options(gekko-yomi-tests PRIVATE -Wall -Wextra -Wpedantic)
 
-    add_dependencies(gekko-yomi-tests gekko_yomi_fake_capture gekko_yomi_empty_plugin)
+    add_dependencies(gekko-yomi-tests gekko_yomi_fake_capture gekko_yomi_empty_plugin gekko_yomi_capture_kwin)
 
     # Generator expressions in ENVIRONMENT need CMake 3.22. The command line
     # has accepted them for much longer, which is what the Docker image uses.
@@ -76,6 +92,19 @@ if(GEKKO_YOMI_BUILD_TESTS)
 
     add_test(NAME wayland_geometry COMMAND gekko-yomi-tests wayland)
     set_tests_properties(wayland_geometry PROPERTIES
+        LABELS wayland
+        SKIP_RETURN_CODE 77
+    )
+
+    add_test(
+        NAME kwin_capture
+        COMMAND
+            ${CMAKE_COMMAND} -E env
+            "GEKKO_YOMI_KWIN_DIR=$<TARGET_FILE_DIR:gekko_yomi_capture_kwin>"
+            $<TARGET_FILE:gekko-yomi-tests>
+            kwin
+    )
+    set_tests_properties(kwin_capture PROPERTIES
         LABELS wayland
         SKIP_RETURN_CODE 77
     )

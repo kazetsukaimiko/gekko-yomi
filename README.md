@@ -13,3 +13,5 @@ cmake --build build
 ```
 
 Plugins are shared libraries that export `gekko_yomi_register`. Put them in `plugins/` next to the executable, or in `../lib/gekko-yomi/plugins`. Set `GEKKO_YOMI_PLUGINS` to a colon-separated directory list to use those directories and no others.
+
+This build produces `plugins/capture_kwin.so`. It lists normal and dialog windows through KWin and returns their pixels as BGRA. Running `./build/gekko-yomi` loads that plugin and then exits, because the page is not in this build yet.
