@@ -19,7 +19,7 @@ A web UI on a local port.
 
 One capture implementation, for this machine. One OCR implementation, to start. The other models plug in behind the same interface.
 
-Qt is not required for the MVP. A system-tray icon and a small settings popup are a later, optional shell. The CMake option `GEKKO_YOMI_QT_SHELL` stays off unless that shell is explicitly requested, and the core library does not include Qt.
+Qt is not required for the web MVP. A system-tray icon and a small settings window come later. Once that window exists, `GEKKO_YOMI_QT_SHELL` defaults to ON, so a normal build includes it. `-DGEKKO_YOMI_QT_SHELL=OFF` remains for a core-only build. The core library does not link Qt in either case. Until the window is in the tree the option stays OFF, and turning it on is an error.
 
 ## Not the MVP
 
@@ -78,7 +78,7 @@ The OCR worker may be a separate process at first, because the published decode 
 
 ### Optional Qt shell
 
-A tray icon that opens a small settings window. Built only with `-DGEKKO_YOMI_QT_SHELL=ON`. Default is off. Settings that the web UI already covers do not move into Qt as a second source of truth. The shell is a switch for "open the page" and a few local toggles.
+A tray icon that opens a small settings window. When this lands, the default build includes it (`GEKKO_YOMI_QT_SHELL=ON`). Pass `-DGEKKO_YOMI_QT_SHELL=OFF` to skip it. Settings that the web UI already covers do not move into Qt as a second source of truth. The shell is a switch for "open the page" and a few local toggles.
 
 ## Pull requests
 
@@ -90,7 +90,7 @@ A tray icon that opens a small settings window. Built only with `-DGEKKO_YOMI_QT
 6. **The other OCR models**, still behind `OcrEngine`, with a consensus step in the core.
 7. **Readings and the dictionary**, surfaced on the same page.
 8. **Kanji log.** Embedded database. Not before the page works.
-9. **Qt tray shell**, default off.
+9. **Qt tray and settings window.** Default build includes it. `GEKKO_YOMI_QT_SHELL=OFF` leaves it out.
 10. **Overlay**, then under-cursor mode.
 11. **Speech.**
 
@@ -110,4 +110,4 @@ cmake --build build
 ./build/gekko-yomi
 ```
 
-That last command is expected to fail until a plugin exists. `GEKKO_YOMI_QT_SHELL` defaults off. Turning it on is an error until the shell exists.
+That last command is expected to fail until a plugin exists. `GEKKO_YOMI_QT_SHELL` stays off only until the settings window exists. After that, the default is on.
