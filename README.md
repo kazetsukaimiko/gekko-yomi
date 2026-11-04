@@ -4,7 +4,7 @@ Reads Japanese text from a window you pick and shows the original line, furigana
 
 The first milestone is a web page on a local port. An overlay, speech, and a history database are later. See [docs/roadmap.md](docs/roadmap.md).
 
-This tree builds a core library and a process that loads plugins. With no plugins present it exits and says so. Qt is not part of the build unless `-DGEKKO_YOMI_QT_SHELL=ON`, and that option is not implemented yet.
+This tree builds a core library and a process that loads plugins. With no plugins present it exits and says so. The Qt tray and settings window is not in the tree yet, so `GEKKO_YOMI_QT_SHELL` is off and turning it on is an error. Once that window exists, a normal build includes it, and `-DGEKKO_YOMI_QT_SHELL=OFF` skips it. The core library does not link Qt.
 
 ```bash
 cmake -S . -B build -G Ninja
