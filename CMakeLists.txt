@@ -56,6 +56,9 @@ add_custom_command(TARGET gekko-yomi POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         ${CMAKE_SOURCE_DIR}/workers/meiki_ocr.py
         ${CMAKE_BINARY_DIR}/workers/meiki_ocr.py
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${CMAKE_SOURCE_DIR}/workers/kakasi_worker.py
+        ${CMAKE_BINARY_DIR}/workers/kakasi_worker.py
 )
 
 find_package(PkgConfig REQUIRED)
@@ -82,6 +85,32 @@ target_compile_options(gekko_yomi_ocr_meiki PRIVATE -Wall -Wextra -Wpedantic)
 set_target_properties(gekko_yomi_ocr_meiki PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/plugins
     OUTPUT_NAME ocr_meiki
+    PREFIX ""
+)
+
+add_library(gekko_yomi_reading_kakasi SHARED
+    plugins/reading_kakasi/text_worker.cpp
+    plugins/reading_kakasi/kakasi_reading.cpp
+)
+target_link_libraries(gekko_yomi_reading_kakasi PRIVATE gekko_yomi_core gekko_yomi_json)
+target_compile_options(gekko_yomi_reading_kakasi PRIVATE -Wall -Wextra -Wpedantic)
+target_include_directories(gekko_yomi_reading_kakasi PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/plugins/reading_kakasi
+)
+set_target_properties(gekko_yomi_reading_kakasi PROPERTIES
+    LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/plugins
+    OUTPUT_NAME reading_kakasi
+    PREFIX ""
+)
+
+add_library(gekko_yomi_dictionary_tsv SHARED
+    plugins/dictionary_tsv/tsv_dictionary.cpp
+)
+target_link_libraries(gekko_yomi_dictionary_tsv PRIVATE gekko_yomi_core)
+target_compile_options(gekko_yomi_dictionary_tsv PRIVATE -Wall -Wextra -Wpedantic)
+set_target_properties(gekko_yomi_dictionary_tsv PROPERTIES
+    LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/plugins
+    OUTPUT_NAME dictionary_tsv
     PREFIX ""
 )
 
@@ -133,6 +162,8 @@ if(GEKKO_YOMI_BUILD_TESTS)
         gekko_yomi_empty_plugin
         gekko_yomi_capture_kwin
         gekko_yomi_ocr_meiki
+        gekko_yomi_reading_kakasi
+        gekko_yomi_dictionary_tsv
     )
 
     # Generator expressions in ENVIRONMENT need CMake 3.22. The command line
@@ -176,6 +207,9 @@ if(GEKKO_YOMI_BUILD_TESTS)
             "GEKKO_YOMI_FAKE_DIR=$<TARGET_FILE_DIR:gekko_yomi_fake_capture>"
             "GEKKO_YOMI_FAKE_OCR_DIR=$<TARGET_FILE_DIR:gekko_yomi_fake_ocr>"
             "GEKKO_YOMI_FAKE_WORKER=${CMAKE_SOURCE_DIR}/workers/fake_ocr_worker.py"
+            "GEKKO_YOMI_FAKE_KAKASI=${CMAKE_SOURCE_DIR}/workers/fake_kakasi_worker.py"
+            "GEKKO_YOMI_READING_SO=$<TARGET_FILE:gekko_yomi_reading_kakasi>"
+            "GEKKO_YOMI_DICTIONARY_SO=$<TARGET_FILE:gekko_yomi_dictionary_tsv>"
             $<TARGET_FILE:gekko-yomi-tests>
             app
     )
