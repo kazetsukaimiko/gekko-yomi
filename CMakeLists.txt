@@ -29,9 +29,32 @@ target_compile_options(gekko_yomi_core PRIVATE -Wall -Wextra -Wpedantic)
 set_target_properties(gekko_yomi_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_link_libraries(gekko_yomi_core PUBLIC ${CMAKE_DL_LIBS})
 
+add_library(gekko_yomi_json STATIC src/json/json_mini.cpp)
+target_include_directories(gekko_yomi_json PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src/json)
+target_compile_options(gekko_yomi_json PRIVATE -Wall -Wextra -Wpedantic)
+set_target_properties(gekko_yomi_json PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
+find_package(Threads REQUIRED)
+
+add_library(gekko_yomi_app STATIC
+    src/app/bmp.cpp
+    src/app/compose.cpp
+    src/app/http_server.cpp
+    src/app/page.cpp
+)
+target_include_directories(gekko_yomi_app PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src/app)
+target_link_libraries(gekko_yomi_app PUBLIC gekko_yomi_core gekko_yomi_json Threads::Threads)
+target_compile_options(gekko_yomi_app PRIVATE -Wall -Wextra -Wpedantic)
+
 add_executable(gekko-yomi src/app/main.cpp)
 target_compile_options(gekko-yomi PRIVATE -Wall -Wextra -Wpedantic)
-target_link_libraries(gekko-yomi PRIVATE gekko_yomi_core)
+target_link_libraries(gekko-yomi PRIVATE gekko_yomi_app)
+add_custom_command(TARGET gekko-yomi POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/workers
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${CMAKE_SOURCE_DIR}/workers/meiki_ocr.py
+        ${CMAKE_BINARY_DIR}/workers/meiki_ocr.py
+)
 
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(SYSTEMD REQUIRED IMPORTED_TARGET libsystemd)
@@ -48,6 +71,18 @@ set_target_properties(gekko_yomi_capture_kwin PROPERTIES
     PREFIX ""
 )
 
+add_library(gekko_yomi_ocr_meiki SHARED
+    plugins/ocr_meiki/meiki_ocr.cpp
+    plugins/ocr_meiki/worker_session.cpp
+)
+target_link_libraries(gekko_yomi_ocr_meiki PRIVATE gekko_yomi_core gekko_yomi_json)
+target_compile_options(gekko_yomi_ocr_meiki PRIVATE -Wall -Wextra -Wpedantic)
+set_target_properties(gekko_yomi_ocr_meiki PROPERTIES
+    LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/plugins
+    OUTPUT_NAME ocr_meiki
+    PREFIX ""
+)
+
 option(GEKKO_YOMI_BUILD_TESTS "Build unit tests" ON)
 if(GEKKO_YOMI_BUILD_TESTS)
     enable_testing()
@@ -61,6 +96,15 @@ if(GEKKO_YOMI_BUILD_TESTS)
         PREFIX ""
     )
 
+    add_library(gekko_yomi_fake_ocr SHARED tests/fake_ocr.cpp)
+    target_link_libraries(gekko_yomi_fake_ocr PRIVATE gekko_yomi_core)
+    target_compile_options(gekko_yomi_fake_ocr PRIVATE -Wall -Wextra -Wpedantic)
+    set_target_properties(gekko_yomi_fake_ocr PROPERTIES
+        LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/test-plugins/ocr
+        OUTPUT_NAME fake_ocr
+        PREFIX ""
+    )
+
     add_library(gekko_yomi_empty_plugin SHARED tests/empty_plugin.cpp)
     target_compile_options(gekko_yomi_empty_plugin PRIVATE -Wall -Wextra -Wpedantic)
     set_target_properties(gekko_yomi_empty_plugin PROPERTIES
@@ -69,12 +113,25 @@ if(GEKKO_YOMI_BUILD_TESTS)
         PREFIX ""
     )
 
-    add_executable(gekko-yomi-tests tests/tests.cpp plugins/capture_kwin/window_ref.cpp)
-    target_include_directories(gekko-yomi-tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/plugins/capture_kwin)
-    target_link_libraries(gekko-yomi-tests PRIVATE gekko_yomi_core)
+    add_executable(gekko-yomi-tests
+        tests/tests.cpp
+        plugins/capture_kwin/window_ref.cpp
+        plugins/ocr_meiki/worker_session.cpp
+    )
+    target_include_directories(gekko-yomi-tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/plugins/capture_kwin
+        ${CMAKE_CURRENT_SOURCE_DIR}/plugins/ocr_meiki
+    )
+    target_link_libraries(gekko-yomi-tests PRIVATE gekko_yomi_app)
     target_compile_options(gekko-yomi-tests PRIVATE -Wall -Wextra -Wpedantic)
 
-    add_dependencies(gekko-yomi-tests gekko_yomi_fake_capture gekko_yomi_empty_plugin gekko_yomi_capture_kwin)
+    add_dependencies(gekko-yomi-tests
+        gekko_yomi_fake_capture
+        gekko_yomi_fake_ocr
+        gekko_yomi_empty_plugin
+        gekko_yomi_capture_kwin
+        gekko_yomi_ocr_meiki
+    )
 
     # Generator expressions in ENVIRONMENT need CMake 3.22. The command line
     # has accepted them for much longer, which is what the Docker image uses.
@@ -108,4 +165,17 @@ if(GEKKO_YOMI_BUILD_TESTS)
         LABELS wayland
         SKIP_RETURN_CODE 77
     )
+
+    add_test(
+        NAME app
+        COMMAND
+            ${CMAKE_COMMAND} -E env
+            "GEKKO_YOMI_APP=$<TARGET_FILE:gekko-yomi>"
+            "GEKKO_YOMI_FAKE_DIR=$<TARGET_FILE_DIR:gekko_yomi_fake_capture>"
+            "GEKKO_YOMI_FAKE_OCR_DIR=$<TARGET_FILE_DIR:gekko_yomi_fake_ocr>"
+            "GEKKO_YOMI_FAKE_WORKER=${CMAKE_SOURCE_DIR}/workers/fake_ocr_worker.py"
+            $<TARGET_FILE:gekko-yomi-tests>
+            app
+    )
+    set_tests_properties(app PROPERTIES LABELS unit)
 endif()

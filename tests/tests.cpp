@@ -1,16 +1,29 @@
 #include "gekko_yomi/geometry.hpp"
 #include "gekko_yomi/registry.hpp"
 #include "gekko_yomi/result.hpp"
+#include "bmp.hpp"
+#include "compose.hpp"
+#include "http_server.hpp"
+#include "json_mini.hpp"
 #include "window_ref.hpp"
+#include "worker_session.hpp"
 
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <sys/wait.h>
+#include <unistd.h>
+
+#include <csignal>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
+#include <memory>
 #include <string>
-#include <sys/wait.h>
-#include <unistd.h>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -121,17 +134,46 @@ void test_explicit_plugin_path_replaces_defaults() {
     CHECK(registry.load_errors().empty());
 }
 
-std::string slurp_fd(int fd) {
-    std::string out;
-    char buf[256];
-    ssize_t n = 0;
-    while ((n = ::read(fd, buf, sizeof(buf))) > 0) {
-        out.append(buf, static_cast<std::size_t>(n));
+std::string http_exchange(int port, const std::string& request) {
+    const int fd = ::socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) {
+        return {};
     }
-    return out;
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(static_cast<std::uint16_t>(port));
+    ::inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr);
+    if (::connect(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0) {
+        ::close(fd);
+        return {};
+    }
+    std::size_t sent = 0;
+    while (sent < request.size()) {
+        const ssize_t n = ::send(fd, request.data() + sent, request.size() - sent, 0);
+        if (n <= 0) {
+            break;
+        }
+        sent += static_cast<std::size_t>(n);
+    }
+    std::string response;
+    char buf[1024];
+    ssize_t n = 0;
+    while ((n = ::recv(fd, buf, sizeof(buf), 0)) > 0) {
+        response.append(buf, static_cast<std::size_t>(n));
+    }
+    ::close(fd);
+    return response;
 }
 
-void test_app_without_plugins() {
+int port_from_url(const std::string& line) {
+    const auto colon = line.rfind(':');
+    if (colon == std::string::npos) {
+        return 0;
+    }
+    return std::atoi(line.c_str() + colon + 1);
+}
+
+void test_app_serves_without_plugins() {
     const char* app = std::getenv("GEKKO_YOMI_APP");
     CHECK(app != nullptr);
     if (app == nullptr) {
@@ -145,21 +187,284 @@ void test_app_without_plugins() {
     const pid_t pid = fork();
     CHECK(pid >= 0);
     if (pid == 0) {
-        dup2(pipefd[1], STDERR_FILENO);
+        dup2(pipefd[1], STDOUT_FILENO);
         close(pipefd[0]);
         close(pipefd[1]);
         setenv("GEKKO_YOMI_PLUGINS", empty.c_str(), 1);
+        setenv("GEKKO_YOMI_PORT", "0", 1);
         execl(app, app, static_cast<char*>(nullptr));
         _exit(127);
     }
     close(pipefd[1]);
-    const std::string err = slurp_fd(pipefd[0]);
+    std::string line;
+    char byte = 0;
+    while (line.size() < 200) {
+        const ssize_t n = ::read(pipefd[0], &byte, 1);
+        if (n <= 0) {
+            break;
+        }
+        if (byte == '\n') {
+            break;
+        }
+        line.push_back(byte);
+    }
     close(pipefd[0]);
+    const int port = port_from_url(line);
+    CHECK(port > 0);
+    if (port > 0) {
+        const std::string response = http_exchange(port, "GET /api/windows HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
+        CHECK(response.find("no capture plugin is loaded") != std::string::npos);
+        const std::string page = http_exchange(port, "GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
+        CHECK(page.find("月読") != std::string::npos);
+    }
+    kill(pid, SIGTERM);
     int status = 0;
     waitpid(pid, &status, 0);
-    CHECK(WIFEXITED(status));
-    CHECK(WEXITSTATUS(status) == 1);
-    CHECK(err.find("Yeah there's no implementations here buddy") != std::string::npos);
+    CHECK(WIFSIGNALED(status) || WIFEXITED(status));
+}
+
+class FixtureCapture final : public gekko::yomi::CaptureSource {
+public:
+    std::string id() const override { return "fake"; }
+    std::string description() const override { return "in-process"; }
+    gekko::yomi::Result<std::vector<gekko::yomi::WindowInfo>> list_windows() override {
+        gekko::yomi::WindowInfo window;
+        window.id = "window-1";
+        window.title = "Fixture";
+        window.geometry = {0, 0, 2, 1};
+        return gekko::yomi::Result<std::vector<gekko::yomi::WindowInfo>>::success(
+            std::vector<gekko::yomi::WindowInfo>{window});
+    }
+    gekko::yomi::Result<gekko::yomi::Frame> grab_window(std::string_view) override {
+        gekko::yomi::Frame frame;
+        frame.width = 2;
+        frame.height = 1;
+        frame.stride_bytes = 8;
+        frame.pixels = {9, 8, 7, 255, 6, 5, 4, 255};
+        return gekko::yomi::Result<gekko::yomi::Frame>::success(std::move(frame));
+    }
+    gekko::yomi::Result<gekko::yomi::Frame> grab_region(std::string_view, const gekko::yomi::Rect&) override {
+        return grab_window({});
+    }
+};
+
+class FixtureOcr final : public gekko::yomi::OcrEngine {
+public:
+    std::string id() const override { return "fake-ocr"; }
+    std::string description() const override { return "in-process"; }
+    bool provides_character_boxes() const override { return true; }
+    gekko::yomi::Result<gekko::yomi::OcrPass> recognize(const gekko::yomi::Frame&,
+                                                        const gekko::yomi::OcrRequest&) override {
+        gekko::yomi::OcrPass pass;
+        pass.engine_id = "fake-ocr";
+        gekko::yomi::TextRun run;
+        run.text = "漢字";
+        run.box = {0, 0, 2, 1};
+        run.characters.push_back({"漢", {0, 0, 1, 1}, 1});
+        run.characters.push_back({"字", {1, 0, 1, 1}, 1});
+        pass.runs.push_back(std::move(run));
+        return gekko::yomi::Result<gekko::yomi::OcrPass>::success(std::move(pass));
+    }
+};
+
+class FixtureReading final : public gekko::yomi::ReadingProvider {
+public:
+    std::string id() const override { return "fake-reading"; }
+    std::string description() const override { return "in-process"; }
+    gekko::yomi::Result<std::vector<gekko::yomi::Morpheme>> analyze(std::string_view surface) override {
+        gekko::yomi::Morpheme morpheme;
+        morpheme.surface = std::string(surface);
+        morpheme.reading = "かんじ";
+        morpheme.dictionary_form = std::string(surface);
+        morpheme.end_byte = surface.size();
+        return gekko::yomi::Result<std::vector<gekko::yomi::Morpheme>>::success(
+            std::vector<gekko::yomi::Morpheme>{std::move(morpheme)});
+    }
+};
+
+class FixtureDictionary final : public gekko::yomi::Dictionary {
+public:
+    std::string id() const override { return "fake-dict"; }
+    std::string description() const override { return "in-process"; }
+    gekko::yomi::Result<std::vector<gekko::yomi::Gloss>> lookup(std::string_view) override {
+        gekko::yomi::Gloss gloss;
+        gloss.dictionary_form = "漢字";
+        gloss.english.push_back("Chinese characters");
+        return gekko::yomi::Result<std::vector<gekko::yomi::Gloss>>::success(
+            std::vector<gekko::yomi::Gloss>{std::move(gloss)});
+    }
+};
+
+void test_bmp_and_json() {
+    gekko::yomi::Frame frame;
+    frame.width = 1;
+    frame.height = 1;
+    frame.stride_bytes = 4;
+    frame.pixels = {10, 20, 30, 255};
+    const auto bmp = gekko::yomi::encode_bmp(frame);
+    CHECK(bmp.size() == 14 + 40 + 4);
+    CHECK(bmp[0] == 'B' && bmp[1] == 'M');
+    CHECK(bmp[54] == 10 && bmp[55] == 20 && bmp[56] == 30);
+
+    const auto quoted = gekko::yomi::json_quote("a\"b\\c");
+    std::string error;
+    const auto parsed = gekko::yomi::json_parse("{\"window_id\":" + quoted + ",\"n\":1}", &error);
+    CHECK(parsed.has_value());
+    CHECK(error.empty());
+    if (parsed) {
+        CHECK(parsed->field_string("window_id") == "a\"b\\c");
+        CHECK(parsed->field("n") && parsed->field("n")->number == 1);
+    }
+    CHECK(!gekko::yomi::json_parse("{", &error));
+}
+
+void test_compose_fills_readings_when_present() {
+    gekko::yomi::Registry registry;
+    registry.add(std::make_unique<FixtureCapture>());
+    registry.add(std::make_unique<FixtureOcr>());
+    auto plain = gekko::yomi::read_window(registry, "window-1");
+    CHECK(plain.capture_error.empty());
+    CHECK(plain.ocr_error.empty());
+    CHECK(plain.runs.size() == 1);
+    CHECK(plain.runs[0].text == "漢字");
+    CHECK(plain.runs[0].morphemes.empty());
+    CHECK(plain.image_width == 2);
+
+    registry.add(std::make_unique<FixtureReading>());
+    registry.add(std::make_unique<FixtureDictionary>());
+    auto rich = gekko::yomi::read_window(registry, "window-1");
+    CHECK(rich.runs.size() == 1);
+    CHECK(rich.runs[0].morphemes.size() == 1);
+    CHECK(rich.runs[0].morphemes[0].reading == "かんじ");
+    CHECK(rich.runs[0].morphemes[0].glosses.size() == 1);
+    CHECK(rich.runs[0].morphemes[0].glosses[0] == "Chinese characters");
+    const std::string json = gekko::yomi::read_json(rich);
+    CHECK(json.find("かんじ") != std::string::npos);
+    CHECK(json.find("Chinese characters") != std::string::npos);
+}
+
+void test_http_with_fakes() {
+    const char* capture_dir = std::getenv("GEKKO_YOMI_FAKE_DIR");
+    const char* ocr_dir = std::getenv("GEKKO_YOMI_FAKE_OCR_DIR");
+    CHECK(capture_dir != nullptr && ocr_dir != nullptr);
+    if (capture_dir == nullptr || ocr_dir == nullptr) {
+        return;
+    }
+    const std::string plugins = std::string(capture_dir) + ":" + ocr_dir;
+    setenv("GEKKO_YOMI_PLUGINS", plugins.c_str(), 1);
+    gekko::yomi::Registry registry;
+    registry.load();
+    CHECK(registry.load_errors().empty());
+    CHECK(registry.capture_sources().size() == 1);
+    CHECK(registry.ocr_engines().size() == 1);
+
+    gekko::yomi::HttpServer server(&registry);
+    std::string error;
+    CHECK(server.listen(0, &error));
+    if (server.port() == 0) {
+        std::cerr << error << '\n';
+        return;
+    }
+    std::thread thread([&server]() { server.run(); });
+    const std::string windows =
+        http_exchange(server.port(), "GET /api/windows HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n");
+    CHECK(windows.find("window-1") != std::string::npos);
+    const std::string body = "{\"window_id\":\"window-1\"}";
+    const std::string request = "POST /api/read HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\n"
+                                 "Content-Length: " +
+                                 std::to_string(body.size()) + "\r\nConnection: close\r\n\r\n" + body;
+    const std::string read = http_exchange(server.port(), request);
+    CHECK(read.find("漢字") != std::string::npos);
+    CHECK(read.find("\"ocr_error\":\"\"") != std::string::npos);
+    const std::string bmp =
+        http_exchange(server.port(), "GET /api/frame.bmp HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n");
+    CHECK(bmp.find("BM") != std::string::npos);
+    server.stop();
+    thread.join();
+}
+
+void test_fake_worker() {
+    const char* script = std::getenv("GEKKO_YOMI_FAKE_WORKER");
+    CHECK(script != nullptr);
+    if (script == nullptr) {
+        return;
+    }
+    gekko::yomi::meiki::WorkerSession session;
+    std::string error;
+    const bool started = session.start("python3", script, &error);
+    if (!started) {
+        std::cerr << error << '\n';
+    }
+    CHECK(started);
+    if (!started) {
+        return;
+    }
+    const std::uint8_t pixels[8] = {1, 2, 3, 255, 4, 5, 6, 255};
+    const auto line = session.request("{\"width\":2,\"height\":1,\"stride\":8}", pixels, 8, 5000, &error);
+    if (!line) {
+        std::cerr << error << '\n';
+    }
+    CHECK(line.has_value());
+    if (!line) {
+        return;
+    }
+    const auto json = gekko::yomi::json_parse(*line, &error);
+    CHECK(json.has_value());
+    if (!json) {
+        std::cerr << error << '\n';
+        return;
+    }
+    const auto* runs = json->field("runs");
+    CHECK(runs != nullptr && runs->type == gekko::yomi::Json::Type::Array && !runs->array.empty());
+    if (runs != nullptr && !runs->array.empty()) {
+        CHECK(runs->array[0].field_string("text") == "漢字");
+    }
+}
+
+void test_worker_that_exits_is_not_reused() {
+    const auto path = std::filesystem::temp_directory_path() / "gekko-yomi-exit-worker.py";
+    {
+        std::ofstream out(path);
+        out << "import json, sys\n"
+            << "sys.stdout.buffer.write((json.dumps({\"error\": \"missing model\"}) + \"\\n\").encode())\n"
+            << "sys.stdout.buffer.flush()\n"
+            << "raise SystemExit(1)\n";
+    }
+    gekko::yomi::meiki::WorkerSession session;
+    std::string error;
+    const bool started = session.start("python3", path.string(), &error);
+    if (!started) {
+        std::cerr << error << '\n';
+    }
+    CHECK(started);
+    if (!started) {
+        return;
+    }
+    const std::uint8_t pixels[8] = {1, 2, 3, 255, 4, 5, 6, 255};
+    const auto line = session.request("{\"width\":2,\"height\":1,\"stride\":8}", pixels, 8, 5000, &error);
+    if (!line) {
+        std::cerr << error << '\n';
+    }
+    CHECK(line.has_value());
+    if (line) {
+        CHECK(line->find("missing model") != std::string::npos);
+    }
+    for (int i = 0; i < 50 && session.running(); ++i) {
+        ::usleep(10000);
+    }
+    CHECK(!session.running());
+    std::string again;
+    const auto second = session.request("{\"width\":2,\"height\":1,\"stride\":8}", pixels, 8, 1000, &again);
+    CHECK(!second.has_value());
+    CHECK(again.find("not running") != std::string::npos);
+}
+
+void test_app_suite() {
+    test_bmp_and_json();
+    test_compose_fills_readings_when_present();
+    test_http_with_fakes();
+    test_fake_worker();
+    test_worker_that_exits_is_not_reused();
 }
 
 void test_kwin_ids_and_pixels() {
@@ -310,8 +615,10 @@ int main(int argc, char** argv) {
         test_registry_loads_fake();
         test_registry_reports_missing_symbol();
         test_explicit_plugin_path_replaces_defaults();
-        test_app_without_plugins();
+        test_app_serves_without_plugins();
         test_kwin_ids_and_pixels();
+    } else if (which == "app") {
+        test_app_suite();
     } else if (which == "kwin") {
         test_kwin_session();
     } else {
