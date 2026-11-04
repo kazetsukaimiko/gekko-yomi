@@ -33,6 +33,10 @@ struct RunView {
 struct ReadView {
     std::string capture_error;
     std::string ocr_error;
+    // Set when a reading or dictionary plugin is loaded and that call fails.
+    // An absent plugin leaves these empty; the page still shows the OCR text.
+    std::string reading_error;
+    std::string dictionary_error;
     std::string capture_id;
     std::string engine_id;
     std::string window_id;
@@ -45,8 +49,9 @@ struct ReadView {
 };
 
 // First capture source, then first OCR engine. Readings and glosses are filled
-// only when those plugins are loaded. A missing plugin leaves its field empty
-// and sets the matching error string. The grabbed frame is still returned.
+// only when those plugins are loaded. A missing plugin leaves its field empty.
+// A loaded plugin that fails sets reading_error or dictionary_error. The
+// grabbed frame is still returned.
 ReadView read_window(Registry& registry, std::string_view window_id);
 
 std::string windows_json(Registry& registry);

@@ -19,12 +19,16 @@ void append_box(std::string* out, const Rect& box) {
     *out += ']';
 }
 
-void attach_language(Registry& registry, RunView* run) {
+void attach_language(Registry& registry, RunView* run, std::string* reading_error,
+                     std::string* dictionary_error) {
     if (registry.reading_providers().empty() || run->text.empty()) {
         return;
     }
     const auto analyzed = registry.reading_providers().front()->analyze(run->text);
     if (!analyzed.ok() || !analyzed.value) {
+        if (reading_error->empty()) {
+            *reading_error = analyzed.error.empty() ? "reading failed" : analyzed.error;
+        }
         return;
     }
     Dictionary* dictionary =
@@ -43,6 +47,8 @@ void attach_language(Registry& registry, RunView* run) {
                 for (const auto& gloss : *glosses.value) {
                     view.glosses.insert(view.glosses.end(), gloss.english.begin(), gloss.english.end());
                 }
+            } else if (dictionary_error->empty()) {
+                *dictionary_error = glosses.error.empty() ? "dictionary lookup failed" : glosses.error;
             }
         }
         run->morphemes.push_back(std::move(view));
@@ -103,7 +109,7 @@ ReadView read_window(Registry& registry, std::string_view window_id) {
             box.box = character.box;
             item.characters.push_back(std::move(box));
         }
-        attach_language(registry, &item);
+        attach_language(registry, &item, &view.reading_error, &view.dictionary_error);
         view.runs.push_back(std::move(item));
     }
     return view;
@@ -165,6 +171,10 @@ std::string read_json(const ReadView& view) {
     out += json_quote(view.capture_error);
     out += ",\"ocr_error\":";
     out += json_quote(view.ocr_error);
+    out += ",\"reading_error\":";
+    out += json_quote(view.reading_error);
+    out += ",\"dictionary_error\":";
+    out += json_quote(view.dictionary_error);
     out += ",\"capture\":";
     out += json_quote(view.capture_id);
     out += ",\"engine\":";

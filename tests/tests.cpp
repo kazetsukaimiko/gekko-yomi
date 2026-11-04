@@ -24,6 +24,7 @@
 #include <memory>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -459,12 +460,152 @@ void test_worker_that_exits_is_not_reused() {
     CHECK(again.find("not running") != std::string::npos);
 }
 
+std::filesystem::path link_plugins(const std::vector<std::pair<const char*, const char*>>& named) {
+    const auto dir = std::filesystem::temp_directory_path() / "gekko-yomi-lang-plugins";
+    std::filesystem::remove_all(dir);
+    std::filesystem::create_directories(dir);
+    for (const auto& item : named) {
+        if (item.second == nullptr || item.second[0] == '\0') {
+            continue;
+        }
+        std::filesystem::create_symlink(item.second, dir / item.first);
+    }
+    return dir;
+}
+
+void test_language_plugins() {
+    const char* reading_so = std::getenv("GEKKO_YOMI_READING_SO");
+    const char* dictionary_so = std::getenv("GEKKO_YOMI_DICTIONARY_SO");
+    const char* kakasi = std::getenv("GEKKO_YOMI_FAKE_KAKASI");
+    const char* capture_dir = std::getenv("GEKKO_YOMI_FAKE_DIR");
+    const char* ocr_dir = std::getenv("GEKKO_YOMI_FAKE_OCR_DIR");
+    CHECK(reading_so != nullptr && dictionary_so != nullptr && kakasi != nullptr);
+    CHECK(capture_dir != nullptr && ocr_dir != nullptr);
+    if (reading_so == nullptr || dictionary_so == nullptr || kakasi == nullptr || capture_dir == nullptr ||
+        ocr_dir == nullptr) {
+        return;
+    }
+
+    unsetenv("GEKKO_YOMI_DICTIONARY");
+    const auto alone = link_plugins({{"reading_kakasi.so", reading_so}, {"dictionary_tsv.so", dictionary_so}});
+    setenv("GEKKO_YOMI_PLUGINS", alone.c_str(), 1);
+    setenv("GEKKO_YOMI_KAKASI_WORKER", kakasi, 1);
+    {
+        gekko::yomi::Registry registry;
+        registry.load();
+        CHECK(registry.load_errors().empty());
+        CHECK(registry.reading_providers().size() == 1);
+        CHECK(registry.dictionaries().empty());
+    }
+
+    const auto missing = std::filesystem::temp_directory_path() / "gekko-yomi-missing-dictionary.tsv";
+    setenv("GEKKO_YOMI_DICTIONARY", missing.c_str(), 1);
+    {
+        gekko::yomi::Registry registry;
+        registry.load();
+        CHECK(registry.dictionaries().size() == 1);
+        const auto looked = registry.dictionaries().front()->lookup("漢字");
+        CHECK(!looked.ok());
+        CHECK(looked.error.find("not found") != std::string::npos);
+    }
+
+    const auto table = std::filesystem::temp_directory_path() / "gekko-yomi-dictionary.tsv";
+    {
+        std::ofstream out(table);
+        out << "# comment\n\n";
+        out << "漢字\tn\tChinese character / kanji\n";
+        out << "漢字\tn\ta logogram\n";
+        out << "月\tmoon\n";
+    }
+    setenv("GEKKO_YOMI_DICTIONARY", table.c_str(), 1);
+    const auto capture_so = std::filesystem::path(capture_dir) / "fake_capture.so";
+    const auto ocr_so = std::filesystem::path(ocr_dir) / "fake_ocr.so";
+    const auto dir = link_plugins({
+        {"reading_kakasi.so", reading_so},
+        {"dictionary_tsv.so", dictionary_so},
+        {"fake_capture.so", capture_so.c_str()},
+        {"fake_ocr.so", ocr_so.c_str()},
+    });
+    setenv("GEKKO_YOMI_PLUGINS", dir.c_str(), 1);
+    gekko::yomi::Registry registry;
+    registry.load();
+    if (!registry.load_errors().empty()) {
+        std::cerr << registry.load_errors().front() << '\n';
+    }
+    CHECK(registry.load_errors().empty());
+    CHECK(registry.capture_sources().size() == 1);
+    CHECK(registry.ocr_engines().size() == 1);
+    CHECK(registry.reading_providers().size() == 1);
+    CHECK(registry.dictionaries().size() == 1);
+    const auto moon = registry.dictionaries().front()->lookup("月");
+    CHECK(moon.ok() && moon.value && moon.value->size() == 1);
+    if (moon.ok() && moon.value && !moon.value->empty()) {
+        CHECK(moon.value->front().part_of_speech.empty());
+        CHECK(moon.value->front().english.size() == 1);
+        CHECK(moon.value->front().english.front() == "moon");
+    }
+    const auto kanji = registry.dictionaries().front()->lookup("漢字");
+    CHECK(kanji.ok() && kanji.value && kanji.value->size() == 2);
+    if (kanji.ok() && kanji.value && kanji.value->size() == 2) {
+        CHECK(kanji.value->front().english.size() == 2);
+        CHECK(kanji.value->front().english[0] == "Chinese character");
+        CHECK(kanji.value->front().english[1] == "kanji");
+    }
+    const auto unknown = registry.dictionaries().front()->lookup("ない");
+    CHECK(unknown.ok() && unknown.value && unknown.value->empty());
+
+    auto view = gekko::yomi::read_window(registry, "window-1");
+    CHECK(view.capture_error.empty());
+    CHECK(view.ocr_error.empty());
+    CHECK(view.reading_error.empty());
+    CHECK(view.dictionary_error.empty());
+    CHECK(view.runs.size() == 1);
+    if (!view.runs.empty()) {
+        CHECK(view.runs[0].morphemes.size() == 1);
+        if (!view.runs[0].morphemes.empty()) {
+            CHECK(view.runs[0].morphemes[0].reading == "よみ");
+            CHECK(view.runs[0].morphemes[0].end_byte == std::string("漢字").size());
+            CHECK(view.runs[0].morphemes[0].glosses.size() == 3);
+        }
+    }
+    const std::string json = gekko::yomi::read_json(view);
+    CHECK(json.find("よみ") != std::string::npos);
+    CHECK(json.find("Chinese character") != std::string::npos);
+    CHECK(json.find("\"reading_error\":\"\"") != std::string::npos);
+
+    const auto exit_script = std::filesystem::temp_directory_path() / "gekko-yomi-exit-kakasi.py";
+    {
+        std::ofstream out(exit_script);
+        out << "import json, sys\n"
+            << "sys.stdout.buffer.write((json.dumps({\"error\": \"missing kakasi\"}) + \"\\n\").encode())\n"
+            << "sys.stdout.buffer.flush()\n"
+            << "raise SystemExit(1)\n";
+    }
+    setenv("GEKKO_YOMI_KAKASI_WORKER", exit_script.c_str(), 1);
+    gekko::yomi::Registry again;
+    again.load();
+    CHECK(again.reading_providers().size() == 1);
+    if (!again.reading_providers().empty()) {
+        const auto first = again.reading_providers().front()->analyze("漢字");
+        CHECK(!first.ok());
+        CHECK(first.error.find("missing kakasi") != std::string::npos);
+        const auto second = again.reading_providers().front()->analyze("漢字");
+        if (!second.ok() && second.error.find("missing kakasi") == std::string::npos) {
+            std::cerr << "second reading error: " << second.error << '\n';
+        }
+        CHECK(!second.ok());
+        CHECK(second.error.find("missing kakasi") != std::string::npos);
+        CHECK(second.error.find("Broken pipe") == std::string::npos);
+    }
+}
+
 void test_app_suite() {
     test_bmp_and_json();
     test_compose_fills_readings_when_present();
     test_http_with_fakes();
     test_fake_worker();
     test_worker_that_exits_is_not_reused();
+    test_language_plugins();
 }
 
 void test_kwin_ids_and_pixels() {

@@ -256,6 +256,8 @@ async function readSelected() {
   const notes = [];
   if (data.minimized) notes.push("Minimized. This grab may be stale.");
   if (data.ocr_error) notes.push(data.ocr_error);
+  if (data.reading_error) notes.push(data.reading_error);
+  if (data.dictionary_error) notes.push(data.dictionary_error);
   if (data.engine) notes.push(data.engine);
   setStatus(notes.join(" "));
   renderRuns(data);

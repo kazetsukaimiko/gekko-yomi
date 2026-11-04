@@ -23,3 +23,7 @@ This build produces `plugins/capture_kwin.so` and `plugins/ocr_meiki.so`. The ca
 That listens on `127.0.0.1` port 8765 (or the next free port up to 8775) and prints the URL. The page lists windows, grabs the one you pick, and shows the text when an OCR engine answers. Furigana and glosses appear when a reading plugin and a dictionary are loaded. Without them the page still shows the OCR text, or the grabbed image with a note when OCR is missing.
 
 meikiocr is not installed by the build. Point `GEKKO_YOMI_PYTHON` at a Python 3.12 virtualenv that has it. The system Python here is 3.14, which does not have the wheels. Weights download on first use and stay out of git. `GEKKO_YOMI_MEIKI_WORKER` overrides the worker script.
+
+`plugins/reading_kakasi.so` asks `workers/kakasi_worker.py` for kana. `GEKKO_YOMI_KAKASI_WORKER` overrides that script. The worker needs `pykakasi` in the same interpreter. It does not lemmatize: the dictionary form is the surface you see, so a TSV keyed by that surface will match. A later plugin can fill in conjugation.
+
+`plugins/dictionary_tsv.so` reads `GEKKO_YOMI_DICTIONARY`, a UTF-8 TSV you supply. A line is `form`, a tab, `part of speech`, a tab, and the gloss. Two columns mean the second column is the gloss. Several senses in one gloss are split on ` / `. A line starting with `#` is a comment. The file stays out of git. If the table comes from JMdict, keep the Electronic Dictionary Research and Development Group attribution with it. When the variable is unset the plugin does not register, and the page still shows the reading.
