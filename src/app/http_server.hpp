@@ -5,14 +5,18 @@
 #include "gekko_yomi/registry.hpp"
 
 #include <atomic>
+#include <optional>
 #include <string>
+#include <vector>
 
 namespace gekko::yomi {
 
 // One connection at a time, on the calling thread. The socket is 0.0.0.0.
 class HttpServer {
 public:
-    explicit HttpServer(Registry* registry);
+    // buffer is the scan memory. ocr_engines nullopt runs every loaded engine.
+    explicit HttpServer(Registry* registry, OcrBufferOptions buffer = {},
+                        std::optional<std::vector<std::string>> ocr_engines = std::nullopt);
     ~HttpServer();
 
     HttpServer(const HttpServer&) = delete;
@@ -40,6 +44,7 @@ private:
     // Buffers stay with the window currently being read. A new id clears them.
     OcrConsensus memory_;
     std::string memory_window_;
+    std::optional<std::vector<std::string>> ocr_engines_;
 };
 
 }  // namespace gekko::yomi

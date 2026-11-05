@@ -131,7 +131,9 @@ std::string path_only(std::string target) {
 
 }  // namespace
 
-HttpServer::HttpServer(Registry* registry) : registry_(registry) {}
+HttpServer::HttpServer(Registry* registry, OcrBufferOptions buffer,
+                       std::optional<std::vector<std::string>> ocr_engines)
+    : registry_(registry), memory_(std::move(buffer)), ocr_engines_(std::move(ocr_engines)) {}
 
 HttpServer::~HttpServer() {
     if (listen_fd_ >= 0) {
@@ -292,7 +294,8 @@ void HttpServer::handle_client(int client) {
             memory_.clear();
             memory_window_ = window_id;
         }
-        ReadView view = read_window(*registry_, window_id, &memory_);
+        const std::vector<std::string>* enabled = ocr_engines_ ? &(*ocr_engines_) : nullptr;
+        ReadView view = read_window(*registry_, window_id, &memory_, enabled);
         if (view.capture_error.empty() && view.image_width > 0) {
             logger("capture").log(noted, "{}x{} \"{}\"", view.image_width, view.image_height, view.title);
             last_frame_ = std::move(view.frame);

@@ -14,11 +14,16 @@ namespace gekko::yomi {
 // would miss that fragment.
 struct OcrBufferOptions {
     double overlap{0.5};
-    // Empty scans to tolerate at this box. 1 keeps a track through one scan
-    // that sees nothing there, and drops it on the second consecutive miss.
-    // A hit from any overlapping recognition resets the count. Wall-clock
-    // time is not used.
-    int ttl_scans{1};
+    // How many scans a reading may vote, including the scan it was seen on.
+    // 8 keeps that scan and the seven before it. 1 counts only the scan that
+    // just finished, so a line that was replaced in the same box can win
+    // without waiting out the older votes. Wall-clock time is not used.
+    // The shown text still waits for promote_after agreeing scans.
+    int ttl_scans{8};
+    // Consecutive scans with no recognition in this box before the group is
+    // dropped. 2 keeps the group through one empty scan and drops it on the
+    // second. A hit from any overlapping recognition resets the count.
+    int positional_invalidation_scans{2};
     // Recent hits kept for the vote. Older hits fall out.
     int history{8};
     // Consecutive non-fragment hits before the shown text changes, including
@@ -84,10 +89,13 @@ struct EngineScan {
 // and it does not add another two-scan wait (its promote_after is 1).
 // With several engines, overlapping shown runs become one track and vote.
 // A track's box is seen when any engine recognizes text there on this scan.
-// Two scans with no recognition in that box drop the group.
+// positional_invalidation_scans empty scans drop the group. The default, 2,
+// keeps the group through one empty scan and drops it on the second.
+// ttl_scans is how long a reading may vote after that. It does not, by
+// itself, delete the group.
 class OcrConsensus {
 public:
-    OcrConsensus();
+    explicit OcrConsensus(OcrBufferOptions options = {});
 
     std::vector<TextRun> observe(const std::vector<EngineScan>& engines);
     std::vector<TextRun> shown() const { return consensus_.shown(); }
