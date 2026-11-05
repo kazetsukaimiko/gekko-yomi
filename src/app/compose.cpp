@@ -4,6 +4,7 @@
 #include "json_mini.hpp"
 #include "log.hpp"
 
+#include <chrono>
 #include <exception>
 #include <future>
 #include <optional>
@@ -185,26 +186,34 @@ std::optional<TextRun> without_english(const TextRun& run) {
 struct EngineOutcome {
     std::string id;
     std::string error;
+    int milliseconds{0};
     std::vector<TextRun> runs;
 };
 
+int elapsed_ms(std::chrono::steady_clock::time_point started) {
+    return static_cast<int>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started).count());
+}
+
 EngineOutcome recognize_one(OcrEngine* engine, const Frame* frame) {
+    const auto started = std::chrono::steady_clock::now();
     EngineOutcome outcome;
     outcome.id = engine->id();
     try {
         const auto pass = engine->recognize(*frame, {});
         if (!pass.ok() || !pass.value) {
             outcome.error = pass.error.empty() ? "OCR failed" : pass.error;
-            return outcome;
-        }
-        for (const auto& run : pass.value->runs) {
-            if (auto kept = without_english(run)) {
-                outcome.runs.push_back(std::move(*kept));
+        } else {
+            for (const auto& run : pass.value->runs) {
+                if (auto kept = without_english(run)) {
+                    outcome.runs.push_back(std::move(*kept));
+                }
             }
         }
     } catch (const std::exception& ex) {
         outcome.error = ex.what();
     }
+    outcome.milliseconds = elapsed_ms(started);
     return outcome;
 }
 
@@ -280,16 +289,23 @@ void attach_language(Registry& registry, RunView* run, std::string* reading_erro
 }  // namespace
 
 ReadView read_window(Registry& registry, std::string_view window_id, OcrConsensus* memory) {
+    const auto started = std::chrono::steady_clock::now();
     ReadView view;
     view.window_id = std::string(window_id);
+    auto finish = [&]() {
+        view.timings.total_ms = elapsed_ms(started);
+        return view;
+    };
     if (registry.capture_sources().empty()) {
         view.capture_error = "no capture plugin is loaded";
-        return view;
+        return finish();
     }
     CaptureSource* capture = registry.capture_sources().front().get();
     view.capture_id = capture->id();
 
+    const auto listed_at = std::chrono::steady_clock::now();
     const auto windows = capture->list_windows();
+    view.timings.list_ms = elapsed_ms(listed_at);
     if (windows.ok() && windows.value) {
         for (const auto& window : *windows.value) {
             if (window.id == window_id) {
@@ -300,10 +316,12 @@ ReadView read_window(Registry& registry, std::string_view window_id, OcrConsensu
         }
     }
 
+    const auto grabbed_at = std::chrono::steady_clock::now();
     auto grabbed = capture->grab_window(window_id);
+    view.timings.capture_ms = elapsed_ms(grabbed_at);
     if (!grabbed.ok() || !grabbed.value) {
         view.capture_error = grabbed.error.empty() ? "capture failed" : grabbed.error;
-        return view;
+        return finish();
     }
     view.image_width = grabbed.value->width;
     view.image_height = grabbed.value->height;
@@ -311,7 +329,7 @@ ReadView read_window(Registry& registry, std::string_view window_id, OcrConsensu
 
     if (registry.ocr_engines().empty()) {
         view.ocr_error = "no OCR engine is loaded";
-        return view;
+        return finish();
     }
     std::string engine_ids;
     for (const auto& engine : registry.ocr_engines()) {
@@ -322,7 +340,9 @@ ReadView read_window(Registry& registry, std::string_view window_id, OcrConsensu
     }
     view.engine_id = std::move(engine_ids);
 
+    const auto recognized_at = std::chrono::steady_clock::now();
     const auto outcomes = recognize_all(registry.ocr_engines(), view.frame);
+    view.timings.ocr_ms = elapsed_ms(recognized_at);
     std::vector<EngineScan> scans;
     scans.reserve(outcomes.size());
     std::string failures;
@@ -340,10 +360,12 @@ ReadView read_window(Registry& registry, std::string_view window_id, OcrConsensu
             ++succeeded;
             logger("ocr").debug("{} runs {}", outcome.id, outcome.runs.size());
         }
+        view.timings.engines.push_back(EngineMilliseconds{outcome.id, outcome.milliseconds});
         scans.push_back(EngineScan{outcome.id, outcome.runs});
     }
 
     std::vector<TextRun> admitted;
+    const auto buffered_at = std::chrono::steady_clock::now();
     if (memory != nullptr) {
         admitted = memory->observe(scans);
         view.settling = memory->settling() && admitted.empty();
@@ -352,9 +374,11 @@ ReadView read_window(Registry& registry, std::string_view window_id, OcrConsensu
             admitted.insert(admitted.end(), scan.runs.begin(), scan.runs.end());
         }
     }
+    view.timings.buffer_ms = elapsed_ms(buffered_at);
     if (succeeded == 0 && !failures.empty()) {
         view.ocr_error = failures;
     }
+    const auto read_at = std::chrono::steady_clock::now();
     for (const auto& run : admitted) {
         RunView item;
         item.text = run.text;
@@ -369,7 +393,8 @@ ReadView read_window(Registry& registry, std::string_view window_id, OcrConsensu
         attach_language(registry, &item, &view.reading_error, &view.dictionary_error);
         view.runs.push_back(std::move(item));
     }
-    return view;
+    view.timings.language_ms = elapsed_ms(read_at);
+    return finish();
 }
 
 std::string windows_json(Registry& registry) {
@@ -448,6 +473,30 @@ std::string read_json(const ReadView& view) {
     out += std::to_string(view.image_height);
     out += ",\"settling\":";
     out += view.settling ? "true" : "false";
+    out += ",\"timings_ms\":{\"list\":";
+    out += std::to_string(view.timings.list_ms);
+    out += ",\"capture\":";
+    out += std::to_string(view.timings.capture_ms);
+    out += ",\"ocr\":";
+    out += std::to_string(view.timings.ocr_ms);
+    out += ",\"buffer\":";
+    out += std::to_string(view.timings.buffer_ms);
+    out += ",\"language\":";
+    out += std::to_string(view.timings.language_ms);
+    out += ",\"total\":";
+    out += std::to_string(view.timings.total_ms);
+    out += ",\"engines\":[";
+    for (std::size_t i = 0; i < view.timings.engines.size(); ++i) {
+        if (i != 0) {
+            out += ',';
+        }
+        out += "{\"id\":";
+        out += json_quote(view.timings.engines[i].id);
+        out += ",\"ms\":";
+        out += std::to_string(view.timings.engines[i].milliseconds);
+        out += '}';
+    }
+    out += "]}";
     out += ",\"runs\":[";
     for (std::size_t i = 0; i < view.runs.size(); ++i) {
         const auto& run = view.runs[i];

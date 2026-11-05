@@ -107,6 +107,7 @@ std::string page_html() {
     font-size: 1.05rem;
   }
   .status { color: var(--moss); min-height: 1.2rem; font-size: 0.85rem; }
+  .times { color: var(--faded); min-height: 1rem; font-size: 0.75rem; }
   .run { border-top: 1px solid var(--paper-edge); padding: 0.8rem 0; }
   .run .line { font-family: var(--mincho); font-size: 1.65rem; line-height: 1.7; }
   ruby rt { font-size: 0.45em; color: var(--moss); }
@@ -147,12 +148,14 @@ std::string page_html() {
   <section class="sheet">
     <div class="seal">月読</div>
     <div class="status" id="status"></div>
+    <div class="times" id="times"></div>
     <div id="runs"><p class="empty">Pick a window. The text lands here.</p></div>
   </section>
 </main>
 <script>
 const windowSelect = document.getElementById("window");
 const statusLine = document.getElementById("status");
+const timesLine = document.getElementById("times");
 const runsEl = document.getElementById("runs");
 const shot = document.getElementById("shot");
 const boxes = document.getElementById("boxes");
@@ -163,6 +166,26 @@ let readBusy = false;
 let watchTickRunning = false;
 
 function setStatus(text) { statusLine.textContent = text || ""; }
+
+function showTimings(data) {
+  const timing = data && data.timings_ms;
+  if (!timing) {
+    timesLine.textContent = "";
+    return;
+  }
+  const parts = [
+    "total " + timing.total + " ms",
+    "list " + timing.list + " ms",
+    "capture " + timing.capture + " ms",
+    "ocr " + timing.ocr + " ms"
+  ];
+  (timing.engines || []).forEach(function (engine) {
+    parts.push(engine.id + " " + engine.ms + " ms");
+  });
+  parts.push("buffer " + timing.buffer + " ms");
+  parts.push("language " + timing.language + " ms");
+  timesLine.textContent = parts.join(" · ");
+}
 
 function listSignature(windows) {
   return (windows || []).map(function (windowInfo) {
@@ -182,6 +205,7 @@ function clearView(message) {
   empty.textContent = message;
   runsEl.appendChild(empty);
   setStatus(message);
+  timesLine.textContent = "";
 }
 
 async function loadWindows() {
@@ -336,6 +360,7 @@ async function readSelected(quiet) {
     return;
   }
   readBusy = false;
+  showTimings(data);
   // A watch that is still deciding must not wipe a line already on the sheet.
   if (automatic && data.settling && (!data.runs || !data.runs.length) && last && last.runs && last.runs.length) {
     if (!data.capture_error) {

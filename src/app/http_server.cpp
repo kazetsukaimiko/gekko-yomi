@@ -311,6 +311,20 @@ void HttpServer::handle_client(int client) {
         if (!view.dictionary_error.empty()) {
             logger("dictionary").error("{}", view.dictionary_error);
         }
+        std::string engines;
+        for (const auto& engine : view.timings.engines) {
+            engines += ' ';
+            engines += engine.id;
+            engines += '=';
+            engines += std::to_string(engine.milliseconds);
+            engines += "ms";
+        }
+        // Info on a watch too. The other watch lines stay at debug, and this
+        // is the line that shows where a scan spent its time.
+        logger("http").info("scan \"{}\" total={}ms list={}ms capture={}ms ocr={}ms{} buffer={}ms language={}ms runs={}",
+                            view.title, view.timings.total_ms, view.timings.list_ms, view.timings.capture_ms,
+                            view.timings.ocr_ms, engines, view.timings.buffer_ms, view.timings.language_ms,
+                            view.runs.size());
         respond_text(client, 200, "OK", "application/json; charset=utf-8", read_json(view));
         return;
     }

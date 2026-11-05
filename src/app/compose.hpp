@@ -30,6 +30,23 @@ struct RunView {
     std::vector<MorphemeView> morphemes;
 };
 
+struct EngineMilliseconds {
+    std::string id;
+    int milliseconds{0};
+};
+
+// Wall time for one read. ocr_ms is the wait for every engine, which is the
+// slowest engine when they run together. engines is each engine's own time.
+struct ScanTimings {
+    int list_ms{0};
+    int capture_ms{0};
+    int ocr_ms{0};
+    int buffer_ms{0};
+    int language_ms{0};
+    int total_ms{0};
+    std::vector<EngineMilliseconds> engines;
+};
+
 struct ReadView {
     std::string capture_error;
     std::string ocr_error;
@@ -48,6 +65,7 @@ struct ReadView {
     std::vector<RunView> runs;
     // True when a scan buffer has seen text and has not promoted it yet.
     bool settling{false};
+    ScanTimings timings;
 };
 
 class OcrConsensus;
