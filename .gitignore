@@ -66,3 +66,9 @@ vcpkg_installed/
 # test output & cache
 Testing/
 .cache/
+
+# Local Python workers. The app uses <repo>/.venv/bin/python when it exists.
+# Do not commit the environment or model weights.
+.venv/
+__pycache__/
+*.py[cod]

@@ -3,7 +3,7 @@ FROM ubuntu:24.04
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends g++ cmake ninja-build pkg-config ca-certificates libsystemd-dev python3 \
+    && apt-get install -y --no-install-recommends g++ cmake ninja-build pkg-config ca-certificates libsystemd-dev libspdlog-dev python3 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src

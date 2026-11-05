@@ -4,6 +4,7 @@
 #include "bmp.hpp"
 #include "compose.hpp"
 #include "http_server.hpp"
+#include "page.hpp"
 #include "json_mini.hpp"
 #include "window_ref.hpp"
 #include "worker_session.hpp"
@@ -14,8 +15,13 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include "gekko_yomi/ocr_buffer.hpp"
+
+#include <atomic>
 #include <csignal>
+#include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -30,6 +36,8 @@
 namespace {
 
 int g_failures = 0;
+
+bool listening_on_any(int port);
 
 void check(bool ok, const char* expr, int line) {
     if (!ok) {
@@ -362,6 +370,7 @@ void test_http_with_fakes() {
     gekko::yomi::HttpServer server(&registry);
     std::string error;
     CHECK(server.listen(0, &error));
+    CHECK(listening_on_any(server.port()));
     if (server.port() == 0) {
         std::cerr << error << '\n';
         return;
@@ -374,6 +383,9 @@ void test_http_with_fakes() {
     const std::string request = "POST /api/read HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\n"
                                  "Content-Length: " +
                                  std::to_string(body.size()) + "\r\nConnection: close\r\n\r\n" + body;
+    const std::string first_read = http_exchange(server.port(), request);
+    CHECK(first_read.find("\"settling\":true") != std::string::npos);
+    CHECK(first_read.find("漢字") == std::string::npos);
     const std::string read = http_exchange(server.port(), request);
     CHECK(read.find("漢字") != std::string::npos);
     CHECK(read.find("\"ocr_error\":\"\"") != std::string::npos);
@@ -599,9 +611,184 @@ void test_language_plugins() {
     }
 }
 
+class MixedOcr final : public gekko::yomi::OcrEngine {
+public:
+    std::string id() const override { return "mixed-ocr"; }
+    std::string description() const override { return "in-process"; }
+    bool provides_character_boxes() const override { return true; }
+    gekko::yomi::Result<gekko::yomi::OcrPass> recognize(const gekko::yomi::Frame&,
+                                                        const gekko::yomi::OcrRequest&) override {
+        gekko::yomi::OcrPass pass;
+        pass.engine_id = "mixed-ocr";
+        gekko::yomi::TextRun mixed;
+        mixed.text = "Hello 漢字";
+        mixed.characters.push_back({"H", {0, 0, 1, 1}, 1});
+        mixed.characters.push_back({"漢", {1, 0, 1, 1}, 1});
+        mixed.characters.push_back({"字", {2, 0, 1, 1}, 1});
+        pass.runs.push_back(std::move(mixed));
+        gekko::yomi::TextRun english;
+        english.text = "File!";
+        english.characters.push_back({"F", {0, 1, 1, 1}, 1});
+        pass.runs.push_back(std::move(english));
+        gekko::yomi::TextRun fullwidth;
+        fullwidth.text = "ＡＢＣテスト";
+        pass.runs.push_back(std::move(fullwidth));
+        gekko::yomi::TextRun number;
+        number.text = "Chapter 2";
+        pass.runs.push_back(std::move(number));
+        gekko::yomi::TextRun digits;
+        digits.text = "123";
+        pass.runs.push_back(std::move(digits));
+        gekko::yomi::TextRun clock;
+        clock.text = "12:30";
+        pass.runs.push_back(std::move(clock));
+        gekko::yomi::TextRun marks;
+        marks.text = "、。！……";
+        pass.runs.push_back(std::move(marks));
+        gekko::yomi::TextRun chapter;
+        chapter.text = "第2話";
+        chapter.characters.push_back({"第", {0, 2, 1, 1}, 1});
+        chapter.characters.push_back({"2", {1, 2, 1, 1}, 1});
+        chapter.characters.push_back({"話", {2, 2, 1, 1}, 1});
+        pass.runs.push_back(std::move(chapter));
+        return gekko::yomi::Result<gekko::yomi::OcrPass>::success(std::move(pass));
+    }
+};
+
+void test_compose_drops_english_letters() {
+    gekko::yomi::Registry registry;
+    registry.add(std::make_unique<FixtureCapture>());
+    registry.add(std::make_unique<MixedOcr>());
+    registry.add(std::make_unique<FixtureReading>());
+    const auto view = gekko::yomi::read_window(registry, "window-1");
+    CHECK(view.ocr_error.empty());
+    CHECK(view.runs.size() == 3);
+    if (view.runs.size() == 3) {
+        CHECK(view.runs[0].text == "漢字");
+        CHECK(view.runs[0].characters.size() == 2);
+        CHECK(view.runs[0].characters[0].text == "漢");
+        CHECK(view.runs[0].characters[1].text == "字");
+        CHECK(view.runs[0].morphemes.size() == 1);
+        CHECK(view.runs[0].morphemes[0].surface == "漢字");
+        CHECK(view.runs[1].text == "テスト");
+        CHECK(view.runs[2].text == "第2話");
+        CHECK(view.runs[2].characters.size() == 2);
+        if (view.runs[2].characters.size() == 2) {
+            CHECK(view.runs[2].characters[0].text == "第");
+            CHECK(view.runs[2].characters[1].text == "話");
+        }
+    }
+    const std::string json = gekko::yomi::read_json(view);
+    CHECK(json.find("Hello") == std::string::npos);
+    CHECK(json.find("File") == std::string::npos);
+    CHECK(json.find("Chapter") == std::string::npos);
+    CHECK(json.find("123") == std::string::npos);
+    CHECK(json.find("12:30") == std::string::npos);
+    CHECK(json.find("第2話") != std::string::npos);
+    const std::string page = gekko::yomi::page_html();
+    CHECK(page.find("readSelected(true)") != std::string::npos);
+    CHECK(page.find("watch: automatic") != std::string::npos);
+    CHECK(page.find("Settling this pass") != std::string::npos);
+    CHECK(page.find("id=\"poll\"") != std::string::npos);
+    CHECK(page.find("value=\"50\"") != std::string::npos);
+    CHECK(page.find("value=\"1000\" selected") != std::string::npos);
+}
+
+bool listening_on_any(int port) {
+    std::ifstream tcp("/proc/net/tcp");
+    char hex[8];
+    std::snprintf(hex, sizeof(hex), "%04X", port);
+    const std::string needle = std::string("00000000:") + hex;
+    std::string line;
+    while (std::getline(tcp, line)) {
+        if (line.find(needle) != std::string::npos) {
+            return true;
+        }
+    }
+    return false;
+}
+
+std::atomic<int>* g_ocr_gate = nullptr;
+
+bool ocr_gate_wait() {
+    if (g_ocr_gate == nullptr) {
+        return true;
+    }
+    const int ticket = g_ocr_gate->fetch_add(1);
+    const int need = (ticket / 2 + 1) * 2;
+    for (int i = 0; i < 200 && g_ocr_gate->load() < need; ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    return g_ocr_gate->load() >= need;
+}
+
+class ParallelShortOcr final : public gekko::yomi::OcrEngine {
+public:
+    std::string id() const override { return "short-ocr"; }
+    std::string description() const override { return "in-process"; }
+    bool provides_character_boxes() const override { return false; }
+    gekko::yomi::Result<gekko::yomi::OcrPass> recognize(const gekko::yomi::Frame&,
+                                                        const gekko::yomi::OcrRequest&) override {
+        if (!ocr_gate_wait()) {
+            return gekko::yomi::Result<gekko::yomi::OcrPass>::failure("engines did not run together");
+        }
+        gekko::yomi::OcrPass pass;
+        gekko::yomi::TextRun run;
+        run.text = "だが、それは中わ恋だった";
+        run.box = {10, 20, 300, 40};
+        pass.runs.push_back(std::move(run));
+        return gekko::yomi::Result<gekko::yomi::OcrPass>::success(std::move(pass));
+    }
+};
+
+class ParallelLongOcr final : public gekko::yomi::OcrEngine {
+public:
+    std::string id() const override { return "long-ocr"; }
+    std::string description() const override { return "in-process"; }
+    bool provides_character_boxes() const override { return false; }
+    gekko::yomi::Result<gekko::yomi::OcrPass> recognize(const gekko::yomi::Frame&,
+                                                        const gekko::yomi::OcrRequest&) override {
+        if (!ocr_gate_wait()) {
+            return gekko::yomi::Result<gekko::yomi::OcrPass>::failure("engines did not run together");
+        }
+        gekko::yomi::OcrPass pass;
+        gekko::yomi::TextRun run;
+        run.text = "だが、それはかなわぬ恋だった";
+        run.box = {10, 20, 300, 40};
+        pass.runs.push_back(std::move(run));
+        return gekko::yomi::Result<gekko::yomi::OcrPass>::success(std::move(pass));
+    }
+};
+
+void test_parallel_engines_agree_on_the_longer_line() {
+    std::atomic<int> entered{0};
+    g_ocr_gate = &entered;
+    gekko::yomi::Registry registry;
+    registry.add(std::make_unique<FixtureCapture>());
+    registry.add(std::make_unique<ParallelShortOcr>());
+    registry.add(std::make_unique<ParallelLongOcr>());
+    gekko::yomi::OcrConsensus memory;
+    const auto first = gekko::yomi::read_window(registry, "window-1", &memory);
+    CHECK(first.ocr_error.empty());
+    CHECK(first.settling);
+    CHECK(first.runs.empty());
+    CHECK(entered.load() >= 2);
+    const auto second = gekko::yomi::read_window(registry, "window-1", &memory);
+    CHECK(second.ocr_error.empty());
+    CHECK(!second.settling);
+    CHECK(second.runs.size() == 1);
+    if (!second.runs.empty()) {
+        CHECK(second.runs[0].text == "だが、それはかなわぬ恋だった");
+    }
+    CHECK(second.engine_id == "short-ocr+long-ocr");
+    g_ocr_gate = nullptr;
+}
+
 void test_app_suite() {
     test_bmp_and_json();
     test_compose_fills_readings_when_present();
+    test_compose_drops_english_letters();
+    test_parallel_engines_agree_on_the_longer_line();
     test_http_with_fakes();
     test_fake_worker();
     test_worker_that_exits_is_not_reused();
@@ -734,6 +921,70 @@ void test_kwin_session() {
     CHECK(near(frame.value->mapping.client_inset_image_x, 0));
 }
 
+gekko::yomi::TextRun sample_line(std::string text, double x, double y, double width, double height) {
+    gekko::yomi::TextRun run;
+    run.text = std::move(text);
+    run.box = {x, y, width, height};
+    return run;
+}
+
+void test_ocr_buffer() {
+    const auto full = sample_line("だが、それはかなわぬ恋だった", 0, 0, 200, 40);
+    const auto piece = sample_line("恋", 80, 0, 40, 40);
+    gekko::yomi::OcrBuffer buffer;
+    const auto hidden = buffer.observe({piece, full});
+    CHECK(hidden.empty());
+    CHECK(buffer.warming());
+    const auto shown = buffer.observe({piece, full});
+    CHECK(shown.size() == 1);
+    if (!shown.empty()) {
+        CHECK(shown[0].text == full.text);
+    }
+    const auto held = buffer.observe({sample_line("だが、それは中わ恋だった", 0, 0, 200, 40)});
+    CHECK(held.size() == 1);
+    if (!held.empty()) {
+        CHECK(held[0].text == full.text);
+    }
+
+    gekko::yomi::OcrBufferOptions quick;
+    quick.promote_after = 1;
+    quick.ttl_scans = 2;
+    gekko::yomi::OcrBuffer aging(quick);
+    CHECK(aging.observe({sample_line("漢字", 0, 0, 20, 20)}).size() == 1);
+    CHECK(aging.observe({}).size() == 1);
+    CHECK(aging.observe({}).size() == 1);
+    CHECK(aging.observe({}).empty());
+
+    gekko::yomi::OcrBuffer spaced(quick);
+    const auto pair = spaced.observe(
+        {sample_line("上", 0, 0, 20, 20), sample_line("下", 0, 80, 20, 20)});
+    CHECK(pair.size() == 2);
+
+    gekko::yomi::TextRun dragon = sample_line("竜", 0, 0, 30, 30);
+    dragon.confidence = 0.9F;
+    gekko::yomi::TextRun someone = sample_line("誰", 0, 0, 30, 30);
+    someone.confidence = 0.2F;
+    gekko::yomi::OcrBuffer votes(quick);
+    CHECK(votes.observe({someone})[0].text == "誰");
+    CHECK(votes.observe({dragon})[0].text == "竜");
+
+    gekko::yomi::OcrConsensus consensus;
+    const auto waiting = consensus.observe(
+        {{"meiki", {full}}, {"other", {sample_line("だが、それは中わ恋だった", 0, 0, 200, 40)}}});
+    CHECK(waiting.empty());
+    CHECK(consensus.settling());
+    const auto agreed = consensus.observe(
+        {{"meiki", {full}}, {"other", {sample_line("だが、それは中わ恋だった", 0, 0, 200, 40)}}});
+    CHECK(agreed.size() == 1);
+    if (!agreed.empty()) {
+        CHECK(agreed[0].text == full.text);
+    }
+    CHECK(consensus.engine("meiki") != nullptr);
+    CHECK(consensus.engine("missing") == nullptr);
+    consensus.clear();
+    CHECK(consensus.observe({{"meiki", {full}}}).empty());
+}
+
 void test_wayland_runs_same_geometry() {
     if (std::getenv("WAYLAND_DISPLAY") == nullptr) {
         std::cerr << "SKIP no WAYLAND_DISPLAY\n";
@@ -756,6 +1007,7 @@ int main(int argc, char** argv) {
         test_registry_loads_fake();
         test_registry_reports_missing_symbol();
         test_explicit_plugin_path_replaces_defaults();
+        test_ocr_buffer();
         test_app_serves_without_plugins();
         test_kwin_ids_and_pixels();
     } else if (which == "app") {

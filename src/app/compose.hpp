@@ -46,13 +46,23 @@ struct ReadView {
     int image_height{0};
     Frame frame;
     std::vector<RunView> runs;
+    // True when a scan buffer has seen text and has not promoted it yet.
+    bool settling{false};
 };
 
-// First capture source, then first OCR engine. Readings and glosses are filled
-// only when those plugins are loaded. A missing plugin leaves its field empty.
-// A loaded plugin that fails sets reading_error or dictionary_error. The
-// grabbed frame is still returned.
-ReadView read_window(Registry& registry, std::string_view window_id);
+class OcrConsensus;
+
+// First capture source, then every OCR engine. Engines run together when
+// more than one is loaded. Latin letters (ASCII and fullwidth) are removed
+// before anything is remembered. A run that is only numbers or symbols is
+// dropped; digits and marks stay when the same run still has kana or kanji.
+// When memory is set, each engine updates its
+// own buffer and a consensus buffer merges what those buffers show. A null
+// memory returns the filtered runs of this scan directly. Readings and
+// glosses are filled only when those plugins are loaded. A missing plugin
+// leaves its field empty. A loaded plugin that fails sets reading_error or
+// dictionary_error. The grabbed frame is still returned.
+ReadView read_window(Registry& registry, std::string_view window_id, OcrConsensus* memory = nullptr);
 
 std::string windows_json(Registry& registry);
 std::string read_json(const ReadView& view);

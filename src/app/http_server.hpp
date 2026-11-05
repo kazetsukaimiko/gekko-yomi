@@ -1,6 +1,7 @@
 #pragma once
 
 #include "gekko_yomi/frame.hpp"
+#include "gekko_yomi/ocr_buffer.hpp"
 #include "gekko_yomi/registry.hpp"
 
 #include <atomic>
@@ -8,7 +9,7 @@
 
 namespace gekko::yomi {
 
-// One connection at a time, on the calling thread. Bind is 127.0.0.1 only.
+// One connection at a time, on the calling thread. The socket is 0.0.0.0.
 class HttpServer {
 public:
     explicit HttpServer(Registry* registry);
@@ -36,6 +37,9 @@ private:
     std::atomic<bool> stop_{false};
     Frame last_frame_;
     bool have_frame_{false};
+    // Buffers stay with the window currently being read. A new id clears them.
+    OcrConsensus memory_;
+    std::string memory_window_;
 };
 
 }  // namespace gekko::yomi
