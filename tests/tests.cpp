@@ -388,6 +388,7 @@ void test_http_with_fakes() {
     CHECK(first_read.find("漢字") == std::string::npos);
     const std::string read = http_exchange(server.port(), request);
     CHECK(read.find("漢字") != std::string::npos);
+    CHECK(read.find("\"timings_ms\"") != std::string::npos);
     CHECK(read.find("\"ocr_error\":\"\"") != std::string::npos);
     const std::string bmp =
         http_exchange(server.port(), "GET /api/frame.bmp HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n");
@@ -685,6 +686,12 @@ void test_compose_drops_english_letters() {
     CHECK(json.find("123") == std::string::npos);
     CHECK(json.find("12:30") == std::string::npos);
     CHECK(json.find("第2話") != std::string::npos);
+    CHECK(json.find("\"timings_ms\"") != std::string::npos);
+    CHECK(view.timings.engines.size() == 1);
+    if (!view.timings.engines.empty()) {
+        CHECK(view.timings.engines[0].id == "mixed-ocr");
+    }
+    CHECK(view.timings.total_ms >= view.timings.ocr_ms);
     const std::string page = gekko::yomi::page_html();
     CHECK(page.find("readSelected(true)") != std::string::npos);
     CHECK(page.find("watch: automatic") != std::string::npos);
@@ -692,6 +699,8 @@ void test_compose_drops_english_letters() {
     CHECK(page.find("id=\"poll\"") != std::string::npos);
     CHECK(page.find("value=\"50\"") != std::string::npos);
     CHECK(page.find("value=\"1000\" selected") != std::string::npos);
+    CHECK(page.find("id=\"times\"") != std::string::npos);
+    CHECK(page.find("timings_ms") != std::string::npos);
 }
 
 bool listening_on_any(int port) {
