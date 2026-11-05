@@ -4,6 +4,7 @@
 #include "json_mini.hpp"
 #include "log.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <exception>
 #include <future>
@@ -14,6 +15,16 @@
 
 namespace gekko::yomi {
 namespace {
+
+std::size_t codepoints(std::string_view text) {
+    std::size_t count = 0;
+    for (unsigned char byte : text) {
+        if ((byte & 0xC0) != 0x80) {
+            ++count;
+        }
+    }
+    return count;
+}
 
 void append_utf8(std::string* out, char32_t cp) {
     if (cp <= 0x7F) {
@@ -393,6 +404,10 @@ ReadView read_window(Registry& registry, std::string_view window_id, OcrConsensu
         attach_language(registry, &item, &view.reading_error, &view.dictionary_error);
         view.runs.push_back(std::move(item));
     }
+    // Longest line first. Equal lengths keep the order the buffer produced.
+    std::stable_sort(view.runs.begin(), view.runs.end(), [](const RunView& left, const RunView& right) {
+        return codepoints(left.text) > codepoints(right.text);
+    });
     view.timings.language_ms = elapsed_ms(read_at);
     return finish();
 }

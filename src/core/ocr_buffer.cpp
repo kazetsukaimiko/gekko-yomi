@@ -70,7 +70,7 @@ OcrBuffer::OcrBuffer(OcrBufferOptions options) : options_(options) {
     }
 }
 
-std::vector<TextRun> OcrBuffer::observe(const std::vector<TextRun>& runs) {
+std::vector<TextRun> OcrBuffer::observe(const std::vector<TextRun>& runs, const std::vector<TextRun>* present) {
     ++scan_;
 
     struct Item {
@@ -166,7 +166,11 @@ std::vector<TextRun> OcrBuffer::observe(const std::vector<TextRun>& runs) {
         const Item& item = items[static_cast<std::size_t>(i)];
         if (item.fresh) {
             track.history.push_back(item.incoming);
-            track.last_seen = scan_;
+            // A caller that passes present is feeding remembered lines. Those
+            // lines vote, but they are not a new sighting of the box.
+            if (present == nullptr) {
+                track.last_seen = scan_;
+            }
         } else {
             track.history.insert(track.history.end(), item.history.begin(), item.history.end());
             if (item.last_seen >= track.last_seen) {
@@ -186,6 +190,28 @@ std::vector<TextRun> OcrBuffer::observe(const std::vector<TextRun>& runs) {
         if (track.history.empty()) {
             continue;
         }
+        track.region = Rect{};
+        for (const auto& reading : track.history) {
+            track.region = unite_box(track.region, reading.box);
+        }
+        if (present != nullptr) {
+            const bool seen = std::any_of(present->begin(), present->end(), [&](const TextRun& run) {
+                if (run.text.empty()) {
+                    return false;
+                }
+                if (overlap_ratio(track.region, run.box) >= options_.overlap) {
+                    return true;
+                }
+                if (box_area(track.region) > 0 || box_area(run.box) > 0) {
+                    return false;
+                }
+                return std::any_of(track.history.begin(), track.history.end(),
+                                   [&](const Reading& reading) { return reading.text == run.text; });
+            });
+            if (seen) {
+                track.last_seen = scan_;
+            }
+        }
         if (scan_ - track.last_seen > options_.ttl_scans) {
             continue;
         }
@@ -198,10 +224,6 @@ std::vector<TextRun> OcrBuffer::observe(const std::vector<TextRun>& runs) {
         if (static_cast<int>(track.history.size()) > options_.history) {
             track.history.erase(track.history.begin(),
                                 track.history.end() - static_cast<std::ptrdiff_t>(options_.history));
-        }
-        track.region = Rect{};
-        for (const auto& reading : track.history) {
-            track.region = unite_box(track.region, reading.box);
         }
         choose_shown(&track);
         kept.push_back(std::move(track));
@@ -386,6 +408,7 @@ OcrConsensus::OcrConsensus() : consensus_(([] {
 
 std::vector<TextRun> OcrConsensus::observe(const std::vector<EngineScan>& engines) {
     std::vector<TextRun> shown_runs;
+    std::vector<TextRun> sightings;
     std::vector<std::string> seen;
     seen.reserve(engines.size());
     for (const auto& engine : engines) {
@@ -403,6 +426,7 @@ std::vector<TextRun> OcrConsensus::observe(const std::vector<EngineScan>& engine
         }
         const auto shown = buffer->observe(engine.runs);
         shown_runs.insert(shown_runs.end(), shown.begin(), shown.end());
+        sightings.insert(sightings.end(), engine.runs.begin(), engine.runs.end());
     }
     for (auto& entry : engines_) {
         bool present = false;
@@ -416,7 +440,7 @@ std::vector<TextRun> OcrConsensus::observe(const std::vector<EngineScan>& engine
             entry.second.observe({});
         }
     }
-    return consensus_.observe(shown_runs);
+    return consensus_.observe(shown_runs, &sightings);
 }
 
 bool OcrConsensus::settling() const {

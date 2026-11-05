@@ -14,9 +14,11 @@ namespace gekko::yomi {
 // would miss that fragment.
 struct OcrBufferOptions {
     double overlap{0.5};
-    // Missed scans to tolerate. A static screen keeps hitting the track, so
-    // the count never advances. Wall-clock time is not used.
-    int ttl_scans{8};
+    // Empty scans to tolerate at this box. 1 keeps a track through one scan
+    // that sees nothing there, and drops it on the second consecutive miss.
+    // A hit from any overlapping recognition resets the count. Wall-clock
+    // time is not used.
+    int ttl_scans{1};
     // Recent hits kept for the vote. Older hits fall out.
     int history{8};
     // Consecutive non-fragment hits before the shown text changes, including
@@ -32,7 +34,11 @@ class OcrBuffer {
 public:
     explicit OcrBuffer(OcrBufferOptions options = {});
 
-    std::vector<TextRun> observe(const std::vector<TextRun>& runs);
+    // runs are the readings to remember. When present is null, those readings
+    // also mark the box as seen. When present is set, only those runs mark
+    // the box; a remembered line passed in runs does not keep the track alive.
+    std::vector<TextRun> observe(const std::vector<TextRun>& runs,
+                                 const std::vector<TextRun>* present = nullptr);
     std::vector<TextRun> shown() const;
     // History is present and nothing has been promoted yet.
     bool warming() const;
@@ -77,6 +83,8 @@ struct EngineScan {
 // With one engine the consensus buffer repeats that engine's shown runs,
 // and it does not add another two-scan wait (its promote_after is 1).
 // With several engines, overlapping shown runs become one track and vote.
+// A track's box is seen when any engine recognizes text there on this scan.
+// Two scans with no recognition in that box drop the group.
 class OcrConsensus {
 public:
     OcrConsensus();

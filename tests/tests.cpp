@@ -665,19 +665,19 @@ void test_compose_drops_english_letters() {
     CHECK(view.ocr_error.empty());
     CHECK(view.runs.size() == 3);
     if (view.runs.size() == 3) {
-        CHECK(view.runs[0].text == "漢字");
-        CHECK(view.runs[0].characters.size() == 2);
-        CHECK(view.runs[0].characters[0].text == "漢");
-        CHECK(view.runs[0].characters[1].text == "字");
-        CHECK(view.runs[0].morphemes.size() == 1);
-        CHECK(view.runs[0].morphemes[0].surface == "漢字");
-        CHECK(view.runs[1].text == "テスト");
-        CHECK(view.runs[2].text == "第2話");
-        CHECK(view.runs[2].characters.size() == 2);
-        if (view.runs[2].characters.size() == 2) {
-            CHECK(view.runs[2].characters[0].text == "第");
-            CHECK(view.runs[2].characters[1].text == "話");
+        CHECK(view.runs[0].text == "テスト");
+        CHECK(view.runs[1].text == "第2話");
+        CHECK(view.runs[1].characters.size() == 2);
+        if (view.runs[1].characters.size() == 2) {
+            CHECK(view.runs[1].characters[0].text == "第");
+            CHECK(view.runs[1].characters[1].text == "話");
         }
+        CHECK(view.runs[2].text == "漢字");
+        CHECK(view.runs[2].characters.size() == 2);
+        CHECK(view.runs[2].characters[0].text == "漢");
+        CHECK(view.runs[2].characters[1].text == "字");
+        CHECK(view.runs[2].morphemes.size() == 1);
+        CHECK(view.runs[2].morphemes[0].surface == "漢字");
     }
     const std::string json = gekko::yomi::read_json(view);
     CHECK(json.find("Hello") == std::string::npos);
@@ -1028,12 +1028,22 @@ void test_ocr_buffer() {
 
     gekko::yomi::OcrBufferOptions quick;
     quick.promote_after = 1;
-    quick.ttl_scans = 2;
     gekko::yomi::OcrBuffer aging(quick);
     CHECK(aging.observe({sample_line("漢字", 0, 0, 20, 20)}).size() == 1);
     CHECK(aging.observe({}).size() == 1);
-    CHECK(aging.observe({}).size() == 1);
     CHECK(aging.observe({}).empty());
+
+    gekko::yomi::OcrBuffer places(quick);
+    const auto both = places.observe(
+        {sample_line("上", 0, 0, 20, 20), sample_line("下", 0, 80, 20, 20)});
+    CHECK(both.size() == 2);
+    const auto missed_once = places.observe({sample_line("下", 0, 80, 20, 20)});
+    CHECK(missed_once.size() == 2);
+    const auto dropped = places.observe({sample_line("下", 0, 80, 20, 20)});
+    CHECK(dropped.size() == 1);
+    if (!dropped.empty()) {
+        CHECK(dropped[0].text == "下");
+    }
 
     gekko::yomi::OcrBuffer spaced(quick);
     const auto pair = spaced.observe(
@@ -1063,6 +1073,24 @@ void test_ocr_buffer() {
     CHECK(consensus.engine("missing") == nullptr);
     consensus.clear();
     CHECK(consensus.observe({{"meiki", {full}}}).empty());
+
+    gekko::yomi::OcrConsensus places_across;
+    const auto top = sample_line("上", 0, 0, 20, 20);
+    const auto bottom = sample_line("下", 0, 80, 20, 20);
+    CHECK(places_across.observe({{"meiki", {top, bottom}}, {"other", {top, bottom}}}).empty());
+    const auto placed = places_across.observe({{"meiki", {top, bottom}}, {"other", {top, bottom}}});
+    CHECK(placed.size() == 2);
+    const auto one_quiet = places_across.observe({{"meiki", {bottom}}, {"other", {bottom}}});
+    CHECK(one_quiet.size() == 2);
+    const auto top_gone = places_across.observe({{"meiki", {bottom}}, {"other", {bottom}}});
+    CHECK(top_gone.size() == 1);
+    if (!top_gone.empty()) {
+        CHECK(top_gone[0].text == "下");
+    }
+    const auto either = places_across.observe({{"meiki", {bottom}}, {"other", {}}});
+    CHECK(either.size() == 1);
+    CHECK(places_across.observe({{"meiki", {}}, {"other", {}}}).size() == 1);
+    CHECK(places_across.observe({{"meiki", {}}, {"other", {}}}).empty());
 }
 
 void test_wayland_runs_same_geometry() {
