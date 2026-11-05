@@ -62,6 +62,9 @@ add_custom_command(TARGET gekko-yomi POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         ${CMAKE_SOURCE_DIR}/workers/kakasi_worker.py
         ${CMAKE_BINARY_DIR}/workers/kakasi_worker.py
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${CMAKE_SOURCE_DIR}/workers/ppocr_manga.py
+        ${CMAKE_BINARY_DIR}/workers/ppocr_manga.py
 )
 
 find_package(PkgConfig REQUIRED)
@@ -79,15 +82,32 @@ set_target_properties(gekko_yomi_capture_kwin PROPERTIES
     PREFIX ""
 )
 
-add_library(gekko_yomi_ocr_meiki SHARED
-    plugins/ocr_meiki/meiki_ocr.cpp
-    plugins/ocr_meiki/worker_session.cpp
+add_library(gekko_yomi_ocr_worker STATIC
+    plugins/ocr_worker/worker_session.cpp
+    plugins/ocr_worker/python_ocr.cpp
 )
-target_link_libraries(gekko_yomi_ocr_meiki PRIVATE gekko_yomi_core gekko_yomi_json)
+target_include_directories(gekko_yomi_ocr_worker PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/plugins/ocr_worker
+)
+target_link_libraries(gekko_yomi_ocr_worker PUBLIC gekko_yomi_core gekko_yomi_json)
+target_compile_options(gekko_yomi_ocr_worker PRIVATE -Wall -Wextra -Wpedantic)
+set_target_properties(gekko_yomi_ocr_worker PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
+add_library(gekko_yomi_ocr_meiki SHARED plugins/ocr_meiki/meiki_ocr.cpp)
+target_link_libraries(gekko_yomi_ocr_meiki PRIVATE gekko_yomi_ocr_worker)
 target_compile_options(gekko_yomi_ocr_meiki PRIVATE -Wall -Wextra -Wpedantic)
 set_target_properties(gekko_yomi_ocr_meiki PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/plugins
     OUTPUT_NAME ocr_meiki
+    PREFIX ""
+)
+
+add_library(gekko_yomi_ocr_ppocr_manga SHARED plugins/ocr_ppocr_manga/ppocr_manga.cpp)
+target_link_libraries(gekko_yomi_ocr_ppocr_manga PRIVATE gekko_yomi_ocr_worker)
+target_compile_options(gekko_yomi_ocr_ppocr_manga PRIVATE -Wall -Wextra -Wpedantic)
+set_target_properties(gekko_yomi_ocr_ppocr_manga PROPERTIES
+    LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/plugins
+    OUTPUT_NAME ocr_ppocr_manga
     PREFIX ""
 )
 
@@ -150,13 +170,11 @@ if(GEKKO_YOMI_BUILD_TESTS)
     add_executable(gekko-yomi-tests
         tests/tests.cpp
         plugins/capture_kwin/window_ref.cpp
-        plugins/ocr_meiki/worker_session.cpp
     )
     target_include_directories(gekko-yomi-tests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/plugins/capture_kwin
-        ${CMAKE_CURRENT_SOURCE_DIR}/plugins/ocr_meiki
     )
-    target_link_libraries(gekko-yomi-tests PRIVATE gekko_yomi_app)
+    target_link_libraries(gekko-yomi-tests PRIVATE gekko_yomi_app gekko_yomi_ocr_worker)
     target_compile_options(gekko-yomi-tests PRIVATE -Wall -Wextra -Wpedantic)
 
     add_dependencies(gekko-yomi-tests
@@ -165,6 +183,7 @@ if(GEKKO_YOMI_BUILD_TESTS)
         gekko_yomi_empty_plugin
         gekko_yomi_capture_kwin
         gekko_yomi_ocr_meiki
+        gekko_yomi_ocr_ppocr_manga
         gekko_yomi_reading_kakasi
         gekko_yomi_dictionary_tsv
     )
@@ -211,6 +230,7 @@ if(GEKKO_YOMI_BUILD_TESTS)
             "GEKKO_YOMI_FAKE_OCR_DIR=$<TARGET_FILE_DIR:gekko_yomi_fake_ocr>"
             "GEKKO_YOMI_FAKE_WORKER=${CMAKE_SOURCE_DIR}/workers/fake_ocr_worker.py"
             "GEKKO_YOMI_FAKE_KAKASI=${CMAKE_SOURCE_DIR}/workers/fake_kakasi_worker.py"
+            "GEKKO_YOMI_PPOCR_SO=$<TARGET_FILE:gekko_yomi_ocr_ppocr_manga>"
             "GEKKO_YOMI_READING_SO=$<TARGET_FILE:gekko_yomi_reading_kakasi>"
             "GEKKO_YOMI_DICTIONARY_SO=$<TARGET_FILE:gekko_yomi_dictionary_tsv>"
             $<TARGET_FILE:gekko-yomi-tests>

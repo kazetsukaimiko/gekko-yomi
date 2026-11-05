@@ -6,7 +6,7 @@
 #include <string>
 #include <string_view>
 
-namespace gekko::yomi::meiki {
+namespace gekko::yomi::ocr_worker {
 
 // One persistent Python process. A request is a JSON line plus raw bytes.
 // The reply is one JSON line. stderr is inherited so model logs stay visible.
@@ -40,6 +40,7 @@ private:
 };
 
 std::string default_python();
-std::string default_worker_script();
+// GEKKO_YOMI_* override when set, otherwise <executable>/workers/<filename>.
+std::string worker_script(const char* env_name, const char* filename);
 
-}  // namespace gekko::yomi::meiki
+}  // namespace gekko::yomi::ocr_worker
