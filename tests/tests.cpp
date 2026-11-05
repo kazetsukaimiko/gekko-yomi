@@ -402,7 +402,7 @@ void test_fake_worker() {
     if (script == nullptr) {
         return;
     }
-    gekko::yomi::meiki::WorkerSession session;
+    gekko::yomi::ocr_worker::WorkerSession session;
     std::string error;
     const bool started = session.start("python3", script, &error);
     if (!started) {
@@ -443,7 +443,7 @@ void test_worker_that_exits_is_not_reused() {
             << "sys.stdout.buffer.flush()\n"
             << "raise SystemExit(1)\n";
     }
-    gekko::yomi::meiki::WorkerSession session;
+    gekko::yomi::ocr_worker::WorkerSession session;
     std::string error;
     const bool started = session.start("python3", path.string(), &error);
     if (!started) {
@@ -784,6 +784,76 @@ void test_parallel_engines_agree_on_the_longer_line() {
     g_ocr_gate = nullptr;
 }
 
+void test_ppocr_manga_plugin_returns_a_line() {
+    const char* library = std::getenv("GEKKO_YOMI_PPOCR_SO");
+    CHECK(library != nullptr);
+    if (library == nullptr) {
+        return;
+    }
+    const auto script = std::filesystem::temp_directory_path() / "gekko-yomi-ppocr-fake.py";
+    {
+        std::ofstream out(script);
+        out << "import json, sys\n"
+            << "def read_line(stream):\n"
+            << "    data = bytearray()\n"
+            << "    while True:\n"
+            << "        chunk = stream.read(1)\n"
+            << "        if not chunk:\n"
+            << "            return None\n"
+            << "        if chunk == b'\\n':\n"
+            << "            return data.decode('utf-8')\n"
+            << "        data.extend(chunk)\n"
+            << "stream = sys.stdin.buffer\n"
+            << "while True:\n"
+            << "    header = read_line(stream)\n"
+            << "    if header is None:\n"
+            << "        raise SystemExit(0)\n"
+            << "    meta = json.loads(header)\n"
+            << "    nbytes = int(meta['stride']) * int(meta['height'])\n"
+            << "    pixels = stream.read(nbytes)\n"
+            << "    if len(pixels) != nbytes:\n"
+            << "        payload = {'error': 'short pixel read'}\n"
+            << "    else:\n"
+            << "        payload = {'runs': [{'text': '日本語', 'vertical': True, 'confidence': 0.75, "
+            << "'box': [4, 5, 30, 12]}]}\n"
+            << "    sys.stdout.buffer.write((json.dumps(payload, ensure_ascii=False) + '\\n').encode())\n"
+            << "    sys.stdout.buffer.flush()\n";
+    }
+    const auto dir = link_plugins({{"ocr_ppocr_manga.so", library}});
+    setenv("GEKKO_YOMI_PLUGINS", dir.c_str(), 1);
+    setenv("GEKKO_YOMI_PPOCR_MANGA_WORKER", script.c_str(), 1);
+    gekko::yomi::Registry registry;
+    registry.add(std::make_unique<FixtureCapture>());
+    registry.load();
+    CHECK(registry.load_errors().empty());
+    if (!registry.load_errors().empty()) {
+        for (const auto& error : registry.load_errors()) {
+            std::cerr << error << '\n';
+        }
+    }
+    CHECK(registry.ocr_engines().size() == 1);
+    if (!registry.ocr_engines().empty()) {
+        CHECK(registry.ocr_engines().front()->id() == "ppocr-manga");
+        CHECK(!registry.ocr_engines().front()->provides_character_boxes());
+    }
+    const auto view = gekko::yomi::read_window(registry, "window-1");
+    CHECK(view.ocr_error.empty());
+    if (!view.ocr_error.empty()) {
+        std::cerr << view.ocr_error << '\n';
+    }
+    CHECK(view.engine_id == "ppocr-manga");
+    CHECK(view.runs.size() == 1);
+    if (!view.runs.empty()) {
+        CHECK(view.runs[0].text == "日本語");
+        CHECK(view.runs[0].vertical);
+        CHECK(view.runs[0].characters.empty());
+        CHECK(view.runs[0].box.x == 4);
+        CHECK(view.runs[0].box.width == 30);
+    }
+    unsetenv("GEKKO_YOMI_PLUGINS");
+    unsetenv("GEKKO_YOMI_PPOCR_MANGA_WORKER");
+}
+
 void test_app_suite() {
     test_bmp_and_json();
     test_compose_fills_readings_when_present();
@@ -792,6 +862,7 @@ void test_app_suite() {
     test_http_with_fakes();
     test_fake_worker();
     test_worker_that_exits_is_not_reused();
+    test_ppocr_manga_plugin_returns_a_line();
     test_language_plugins();
 }
 

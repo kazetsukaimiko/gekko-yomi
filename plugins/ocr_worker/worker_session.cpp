@@ -11,7 +11,7 @@
 #include <cstring>
 #include <filesystem>
 
-namespace gekko::yomi::meiki {
+namespace gekko::yomi::ocr_worker {
 namespace {
 
 bool write_all(int fd, const char* data, std::size_t size, std::string* error) {
@@ -246,18 +246,19 @@ std::string default_python() {
     return "python3";
 }
 
-std::string default_worker_script() {
-    if (const char* env = std::getenv("GEKKO_YOMI_MEIKI_WORKER")) {
-        if (env[0] != '\0') {
-            return env;
+std::string worker_script(const char* env_name, const char* filename) {
+    if (env_name != nullptr) {
+        if (const char* env = std::getenv(env_name)) {
+            if (env[0] != '\0') {
+                return env;
+            }
         }
     }
     const auto dir = executable_dir();
-    if (dir.empty()) {
+    if (dir.empty() || filename == nullptr || filename[0] == '\0') {
         return {};
     }
-    const auto beside = (std::filesystem::path(dir) / "workers" / "meiki_ocr.py").lexically_normal();
-    return beside.string();
+    return (std::filesystem::path(dir) / "workers" / filename).lexically_normal().string();
 }
 
-}  // namespace gekko::yomi::meiki
+}  // namespace gekko::yomi::ocr_worker
