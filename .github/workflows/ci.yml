@@ -18,7 +18,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install a headless compositor
-        run: sudo apt-get update && sudo apt-get install -y g++ cmake ninja-build pkg-config weston libsystemd-dev
+        run: sudo apt-get update && sudo apt-get install -y g++ cmake ninja-build pkg-config weston libsystemd-dev libspdlog-dev
       - name: Build
         run: cmake -S . -B build -G Ninja -DGEKKO_YOMI_BUILD_TESTS=ON && cmake --build build
       - name: Run the Wayland-labeled scenarios

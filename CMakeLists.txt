@@ -19,6 +19,7 @@ endif()
 
 add_library(gekko_yomi_core
     src/core/geometry.cpp
+    src/core/ocr_buffer.cpp
     src/core/registry.cpp
 )
 target_include_directories(gekko_yomi_core
@@ -37,15 +38,17 @@ target_compile_options(gekko_yomi_json PRIVATE -Wall -Wextra -Wpedantic)
 set_target_properties(gekko_yomi_json PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 find_package(Threads REQUIRED)
+find_package(spdlog CONFIG REQUIRED)
 
 add_library(gekko_yomi_app STATIC
     src/app/bmp.cpp
     src/app/compose.cpp
     src/app/http_server.cpp
+    src/app/log.cpp
     src/app/page.cpp
 )
 target_include_directories(gekko_yomi_app PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src/app)
-target_link_libraries(gekko_yomi_app PUBLIC gekko_yomi_core gekko_yomi_json Threads::Threads)
+target_link_libraries(gekko_yomi_app PUBLIC gekko_yomi_core gekko_yomi_json Threads::Threads spdlog::spdlog)
 target_compile_options(gekko_yomi_app PRIVATE -Wall -Wextra -Wpedantic)
 
 add_executable(gekko-yomi src/app/main.cpp)

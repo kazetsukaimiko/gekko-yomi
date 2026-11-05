@@ -72,6 +72,7 @@ std::string page_html() {
     padding: 0.45rem 0.7rem;
   }
   select { flex: 1; }
+  select#poll { flex: 0 0 auto; }
   button { cursor: pointer; background: var(--cinnabar); border-color: var(--cinnabar); color: #fff8f2; }
   button.quiet { background: transparent; color: var(--paper); border-color: #4a3e32; }
   .frame {
@@ -126,6 +127,13 @@ std::string page_html() {
   <section class="stage">
     <div class="controls">
       <select id="window"></select>
+      <select id="poll" title="How often the chosen window is read">
+        <option value="50">50 ms</option>
+        <option value="100">100 ms</option>
+        <option value="250">250 ms</option>
+        <option value="500">500 ms</option>
+        <option value="1000" selected>1000 ms</option>
+      </select>
       <button type="button" id="refresh" class="quiet">Refresh</button>
       <button type="button" id="read">Read</button>
     </div>
@@ -149,26 +157,84 @@ const runsEl = document.getElementById("runs");
 const shot = document.getElementById("shot");
 const boxes = document.getElementById("boxes");
 let last = null;
+let listKey = "";
+let readToken = 0;
+let readBusy = false;
+let watchTickRunning = false;
 
 function setStatus(text) { statusLine.textContent = text || ""; }
 
+function listSignature(windows) {
+  return (windows || []).map(function (windowInfo) {
+    return windowInfo.id + "\t" + windowInfo.title + "\t" + (windowInfo.minimized ? "1" : "0");
+  }).join("\n");
+}
+
+function clearView(message) {
+  readToken += 1;
+  readBusy = false;
+  last = null;
+  shot.removeAttribute("src");
+  boxes.textContent = "";
+  runsEl.textContent = "";
+  const empty = document.createElement("p");
+  empty.className = "empty";
+  empty.textContent = message;
+  runsEl.appendChild(empty);
+  setStatus(message);
+}
+
 async function loadWindows() {
-  const response = await fetch("/api/windows");
-  const data = await response.json();
-  windowSelect.textContent = "";
+  let data;
+  try {
+    const response = await fetch("/api/windows");
+    if (!response.ok) {
+      return;
+    }
+    data = await response.json();
+  } catch (err) {
+    setStatus("Could not list windows.");
+    return;
+  }
   const errors = (data.load_errors || []).join(" ");
   if (data.capture_error) {
     setStatus(data.capture_error + (errors ? " " + errors : ""));
   } else if (errors) {
     setStatus(errors);
-  } else {
-    setStatus(data.windows.length ? "" : "No windows to read.");
   }
-  for (const windowInfo of data.windows || []) {
+  const windows = data.windows || [];
+  const signature = listSignature(windows);
+  if (signature === listKey) {
+    if (!windows.length && !data.capture_error) {
+      setStatus("No windows to read.");
+    }
+    return;
+  }
+  listKey = signature;
+  const selected = windowSelect.value;
+  windowSelect.textContent = "";
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.textContent = "Choose a window";
+  windowSelect.appendChild(placeholder);
+  let found = false;
+  for (const windowInfo of windows) {
     const option = document.createElement("option");
     option.value = windowInfo.id;
-    option.textContent = windowInfo.title + (windowInfo.minimized ? " (minimized)" : "");
+    const title = windowInfo.title || windowInfo.id;
+    option.textContent = title + (windowInfo.minimized ? " (minimized)" : "");
     windowSelect.appendChild(option);
+    if (windowInfo.id === selected) {
+      found = true;
+    }
+  }
+  if (selected && found) {
+    windowSelect.value = selected;
+  } else if (selected) {
+    windowSelect.value = "";
+    clearView("That window closed.");
+  } else if (!windows.length) {
+    setStatus("No windows to read.");
   }
 }
 
@@ -177,7 +243,7 @@ function renderRuns(data) {
   if (!data.runs || data.runs.length === 0) {
     const empty = document.createElement("p");
     empty.className = "empty";
-    empty.textContent = data.ocr_error || "No text in this grab.";
+    empty.textContent = data.ocr_error || (data.settling ? "Settling this pass…" : "No text in this grab.");
     runsEl.appendChild(empty);
     return;
   }
@@ -234,22 +300,56 @@ function placeBoxes() {
   }
 }
 
-async function readSelected() {
+async function readSelected(quiet) {
+  const automatic = quiet === true;
   const windowId = windowSelect.value;
   if (!windowId) {
-    setStatus("No window selected.");
+    if (!automatic) {
+      setStatus("Choose a window.");
+    }
     return;
   }
-  setStatus("Reading…");
-  const response = await fetch("/api/read", {
-    method: "POST",
-    headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({window_id: windowId})
-  });
-  const data = await response.json();
+  if (automatic && readBusy) {
+    return;
+  }
+  const token = ++readToken;
+  readBusy = true;
+  if (!automatic) {
+    setStatus("Reading…");
+  }
+  let data;
+  try {
+    const response = await fetch("/api/read", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({window_id: windowId, watch: automatic})
+    });
+    data = await response.json();
+  } catch (err) {
+    if (token === readToken) {
+      readBusy = false;
+      setStatus("The read did not finish.");
+    }
+    return;
+  }
+  if (token !== readToken) {
+    return;
+  }
+  readBusy = false;
+  // A watch that is still deciding must not wipe a line already on the sheet.
+  if (automatic && data.settling && (!data.runs || !data.runs.length) && last && last.runs && last.runs.length) {
+    if (!data.capture_error) {
+      shot.onload = placeBoxes;
+      shot.src = "/api/frame.bmp?t=" + Date.now();
+      if (shot.complete) placeBoxes();
+    }
+    return;
+  }
   last = data;
   if (data.capture_error) {
     setStatus(data.capture_error);
+    shot.removeAttribute("src");
+    boxes.textContent = "";
     runsEl.textContent = "";
     return;
   }
@@ -266,10 +366,48 @@ async function readSelected() {
   if (shot.complete) placeBoxes();
 }
 
+const pollSelect = document.getElementById("poll");
+const pollSpeeds = [50, 100, 250, 500, 1000];
+let watchTimer = 0;
+
+function watchDelay() {
+  const value = Number(pollSelect.value);
+  return pollSpeeds.indexOf(value) >= 0 ? value : 1000;
+}
+
+function scheduleWatch() {
+  if (watchTimer) {
+    clearInterval(watchTimer);
+  }
+  watchTimer = setInterval(function () {
+    if (watchTickRunning) {
+      return;
+    }
+    watchTickRunning = true;
+    loadWindows().then(function () {
+      if (windowSelect.value) {
+        return readSelected(true);
+      }
+    }).finally(function () {
+      watchTickRunning = false;
+    });
+  }, watchDelay());
+}
+
 document.getElementById("refresh").addEventListener("click", loadWindows);
-document.getElementById("read").addEventListener("click", readSelected);
+document.getElementById("read").addEventListener("click", function () { readSelected(false); });
+windowSelect.addEventListener("change", function () { readSelected(false); });
+pollSelect.addEventListener("change", function () {
+  localStorage.setItem("gekko-yomi-poll", pollSelect.value);
+  scheduleWatch();
+});
 window.addEventListener("resize", placeBoxes);
+const savedPoll = localStorage.getItem("gekko-yomi-poll");
+if (savedPoll && pollSpeeds.indexOf(Number(savedPoll)) >= 0) {
+  pollSelect.value = savedPoll;
+}
 loadWindows();
+scheduleWatch();
 </script>
 </body>
 </html>

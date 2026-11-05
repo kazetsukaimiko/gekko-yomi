@@ -3,6 +3,7 @@
 #include "bmp.hpp"
 #include "compose.hpp"
 #include "json_mini.hpp"
+#include "log.hpp"
 #include "page.hpp"
 
 #include <arpa/inet.h>
@@ -148,7 +149,7 @@ bool HttpServer::listen(int port, std::string* error) {
     ::setsockopt(listen_fd_, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
     sockaddr_in addr{};
     addr.sin_family = AF_INET;
-    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    addr.sin_addr.s_addr = htonl(INADDR_ANY);
     addr.sin_port = htons(static_cast<std::uint16_t>(port));
     if (::bind(listen_fd_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0) {
         *error = std::string("bind failed: ") + std::strerror(errno);
@@ -237,24 +238,35 @@ void HttpServer::handle_client(int client) {
     const std::string body = message.substr(body_at, content_length);
 
     if (method == "GET" && path == "/") {
+        logger("http").debug("GET /");
         const std::string page = page_html();
         respond_text(client, 200, "OK", "text/html; charset=utf-8", page);
         return;
     }
     if (method == "GET" && path == "/api/windows") {
-        respond_text(client, 200, "OK", "application/json; charset=utf-8", windows_json(*registry_));
+        logger("http").debug("GET /api/windows");
+        const std::string json = windows_json(*registry_);
+        if (registry_->capture_sources().empty()) {
+            logger("capture").warn("no capture plugin is loaded");
+        } else if (json.find("\"capture_error\":\"\"") == std::string::npos) {
+            logger("capture").warn("{}", json);
+        }
+        respond_text(client, 200, "OK", "application/json; charset=utf-8", json);
         return;
     }
     if (method == "GET" && path == "/api/frame.bmp") {
         if (!have_frame_) {
+            logger("http").info("GET /api/frame.bmp: no frame yet");
             respond_text(client, 404, "Not Found", "text/plain; charset=utf-8", "no frame yet");
             return;
         }
         const auto bmp = encode_bmp(last_frame_);
         if (bmp.empty()) {
+            logger("http").error("GET /api/frame.bmp: could not encode bmp");
             respond_text(client, 500, "Internal Server Error", "text/plain; charset=utf-8", "could not encode bmp");
             return;
         }
+        logger("http").info("GET /api/frame.bmp {}x{}", last_frame_.width, last_frame_.height);
         respond(client, 200, "OK", "image/bmp", bmp.data(), bmp.size());
         return;
     }
@@ -262,22 +274,51 @@ void HttpServer::handle_client(int client) {
         std::string parse_error;
         const auto json = json_parse(body, &parse_error);
         if (!json) {
+            logger("http").warn("POST /api/read: {}", parse_error);
             respond_text(client, 400, "Bad Request", "text/plain; charset=utf-8", parse_error);
             return;
         }
         const std::string window_id = json->field_string("window_id");
         if (window_id.empty()) {
+            logger("http").warn("POST /api/read: window_id is required");
             respond_text(client, 400, "Bad Request", "text/plain; charset=utf-8", "window_id is required");
             return;
         }
-        ReadView view = read_window(*registry_, window_id);
+        const Json* watch_field = json->field("watch");
+        const bool watch = watch_field != nullptr && watch_field->type == Json::Type::Bool && watch_field->boolean;
+        const auto noted = watch ? spdlog::level::debug : spdlog::level::info;
+        logger("http").log(noted, "POST /api/read {}", window_id);
+        if (window_id != memory_window_) {
+            memory_.clear();
+            memory_window_ = window_id;
+        }
+        ReadView view = read_window(*registry_, window_id, &memory_);
         if (view.capture_error.empty() && view.image_width > 0) {
+            logger("capture").log(noted, "{}x{} \"{}\"", view.image_width, view.image_height, view.title);
             last_frame_ = std::move(view.frame);
             have_frame_ = true;
+        } else {
+            logger("capture").error("{}", view.capture_error.empty() ? "capture failed" : view.capture_error);
+        }
+        if (!view.ocr_error.empty()) {
+            logger("ocr").error("{}", view.ocr_error);
+        } else if (!view.engine_id.empty()) {
+            logger("ocr").log(noted, "{} runs {}", view.engine_id, view.runs.size());
+        }
+        if (!view.reading_error.empty()) {
+            logger("reading").error("{}", view.reading_error);
+        }
+        if (!view.dictionary_error.empty()) {
+            logger("dictionary").error("{}", view.dictionary_error);
         }
         respond_text(client, 200, "OK", "application/json; charset=utf-8", read_json(view));
         return;
     }
+    if (path == "/favicon.ico") {
+        respond_text(client, 204, "No Content", "text/plain", "");
+        return;
+    }
+    logger("http").info("{} {} not found", method, path);
     respond_text(client, 404, "Not Found", "text/plain; charset=utf-8", "not found");
 }
 
