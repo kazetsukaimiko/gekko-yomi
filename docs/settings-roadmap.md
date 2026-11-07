@@ -41,9 +41,9 @@ Leave a key out to keep its default. The defaults match the behavior from before
 | --- | --- | --- |
 | `buffer.ttl_scans` | 8 | How many scans a reading may vote, including the scan it was seen on. This is not a timer. After that, the hit stays in memory for the promotion streak, but it no longer adds a vote. A short value lets new text replace old text in the same box. Positional removal does not do that, because the new text still occupies the box. `1` counts only the scan that just finished. The line on the page still changes only after it wins two scans. |
 | `buffer.positional_invalidation_scans` | 2 | Consecutive scans with no recognition in that box before the group, its reading, and its preview boxes are dropped. `2` keeps the group through one empty scan and drops it on the second. Any overlapping hit resets the count. One engine still seeing the box is enough. |
-| `ocr.engines` | absent | Ids of loaded OCR engines that run. Omit the key and every loaded engine runs. `[]` runs none. An id that is not loaded is a warning. A listed engine is not called, so it does not spend CPU and does not age the buffer. Plugins still load and are still logged. |
+| `ocr.engines` | absent | Ids of OCR engines to construct. Omit the key and every loaded engine is constructed. `[]` constructs none. An id that is not loaded is a warning. The plugin libraries still load and are still logged. An engine left out is not constructed, so its worker does not start and it does not age the buffer. Its factory stays, so turning it on later does not `dlopen` again. |
 
-`ppocr-manga` stays enabled unless the file says otherwise. To leave it loaded but idle:
+`ppocr-manga` stays enabled unless the file says otherwise. To load its library without starting the worker:
 
 ```json
 {

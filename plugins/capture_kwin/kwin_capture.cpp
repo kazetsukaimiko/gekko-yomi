@@ -753,5 +753,9 @@ public:
 
 GEKKO_YOMI_PLUGIN_EXPORT
 void gekko_yomi_register(gekko::yomi::Host* host) {
-    host->add(std::make_unique<gekko::yomi::kwin::KWinCapture>());
+    host->register_capture(
+        {"kwin", "KWin ScreenShot2 window capture"},
+        [](std::string*) -> std::unique_ptr<gekko::yomi::CaptureSource> {
+            return std::make_unique<gekko::yomi::kwin::KWinCapture>();
+        });
 }

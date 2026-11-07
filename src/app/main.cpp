@@ -98,6 +98,9 @@ int main(int argc, char** argv) {
                                     config.buffer.positional_invalidation_scans);
 
     gekko::yomi::Registry registry;
+    if (config.ocr_engines) {
+        registry.limit_ocr_engines(*config.ocr_engines);
+    }
     registry.load();
     for (const auto& load_error : registry.load_errors()) {
         gekko::yomi::logger("plugin").error("{}", load_error);

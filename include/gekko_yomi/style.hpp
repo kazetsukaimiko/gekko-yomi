@@ -10,6 +10,8 @@
 
 namespace gekko::yomi {
 
+class Runtime;
+
 enum class FontClass {
     Unknown,
     Gothic,
@@ -44,6 +46,8 @@ struct InkStyle {
 class StyleSampler {
 public:
     virtual ~StyleSampler() = default;
+
+    virtual Runtime* runtime() { return nullptr; }
 
     virtual std::string id() const = 0;
     virtual std::string description() const = 0;

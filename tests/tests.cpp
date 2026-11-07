@@ -9,6 +9,9 @@
 #include "json_mini.hpp"
 #include "window_ref.hpp"
 #include "worker_session.hpp"
+#include "python_ocr.hpp"
+
+#include "gekko_yomi/runtime.hpp"
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -507,9 +510,13 @@ void test_language_plugins() {
     {
         gekko::yomi::Registry registry;
         registry.load();
-        CHECK(registry.load_errors().empty());
         CHECK(registry.reading_providers().size() == 1);
         CHECK(registry.dictionaries().empty());
+        CHECK(registry.module_paths().size() == 2);
+        CHECK(registry.load_errors().size() == 1);
+        if (!registry.load_errors().empty()) {
+            CHECK(registry.load_errors().front().find("GEKKO_YOMI_DICTIONARY") != std::string::npos);
+        }
     }
 
     const auto missing = std::filesystem::temp_directory_path() / "gekko-yomi-missing-dictionary.tsv";
@@ -936,10 +943,15 @@ void test_kwin_session() {
     setenv("GEKKO_YOMI_PLUGINS", dir, 1);
     gekko::yomi::Registry registry;
     registry.load();
+    // The KWin .so lives in the same directory as the other plugins. The
+    // dictionary factory declines when GEKKO_YOMI_DICTIONARY is unset. That
+    // is a recorded decline, not a failed dlopen. Anything else is a failure.
     for (const auto& load_error : registry.load_errors()) {
-        std::cerr << load_error << '\n';
+        if (load_error.find("GEKKO_YOMI_DICTIONARY") == std::string::npos) {
+            std::cerr << load_error << '\n';
+            CHECK(false);
+        }
     }
-    CHECK(registry.load_errors().empty());
     gekko::yomi::CaptureSource* kwin = nullptr;
     for (const auto& source : registry.capture_sources()) {
         if (source->id() == "kwin") {
@@ -1431,6 +1443,154 @@ void test_cli_config() {
     CHECK(WIFSIGNALED(status) || WIFEXITED(status));
 }
 
+bool maps_contain(const std::string& path) {
+    std::ifstream maps("/proc/self/maps");
+    std::string line;
+    while (std::getline(maps, line)) {
+        if (line.find(path) != std::string::npos) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool load_errors_contain(const gekko::yomi::Registry& registry, const char* needle) {
+    for (const auto& error : registry.load_errors()) {
+        if (error.find(needle) != std::string::npos) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void test_plugin_lifetime() {
+    const char* dir = std::getenv("GEKKO_YOMI_PROBE_DIR");
+    CHECK(dir != nullptr);
+    if (dir == nullptr) {
+        return;
+    }
+    setenv("GEKKO_YOMI_PLUGINS", dir, 1);
+
+    gekko::yomi::Registry registry;
+    registry.load();
+    CHECK(registry.ocr_engines().size() == 1);
+    CHECK(registry.dictionaries().empty());
+    CHECK(registry.module_paths().size() == 1);
+    CHECK(load_errors_contain(registry, "duplicate plugin id probe"));
+    CHECK(load_errors_contain(registry, "probe dictionary declined"));
+    if (registry.ocr_engines().empty() || registry.module_paths().empty()) {
+        return;
+    }
+
+    auto* runtime = registry.ocr_engines().front()->runtime();
+    CHECK(runtime != nullptr);
+    if (runtime == nullptr) {
+        return;
+    }
+    CHECK(runtime->status().state == gekko::yomi::RuntimeState::Stopped);
+    CHECK(runtime->start().ok());
+    CHECK(runtime->status().state == gekko::yomi::RuntimeState::Running);
+    CHECK(runtime->start().ok());
+    CHECK(runtime->status().state == gekko::yomi::RuntimeState::Running);
+    runtime->stop();
+    CHECK(runtime->status().state == gekko::yomi::RuntimeState::Stopped);
+
+    const std::string path = registry.module_paths().front();
+    CHECK(maps_contain(path));
+    registry.begin_scan();
+    const auto blocked = registry.unload(path);
+    CHECK(!blocked.ok());
+    CHECK(blocked.error.find("scan") != std::string::npos);
+    CHECK(registry.ocr_engines().size() == 1);
+    CHECK(!registry.release_instance("probe").ok());
+    CHECK(!registry.create_instance("probe").ok());
+    registry.end_scan();
+
+    CHECK(registry.release_instance("probe").ok());
+    CHECK(registry.ocr_engines().empty());
+    CHECK(registry.module_paths().size() == 1);
+    CHECK(maps_contain(path));
+    CHECK(registry.create_instance("probe").ok());
+    CHECK(registry.ocr_engines().size() == 1);
+    if (!registry.ocr_engines().empty()) {
+        CHECK(registry.ocr_engines().front()->id() == "probe");
+    }
+    CHECK(!registry.create_instance("probe").ok());
+    const auto declined = registry.create_instance("probe-dict");
+    CHECK(!declined.ok());
+    CHECK(declined.error.find("declined") != std::string::npos);
+    CHECK(registry.dictionaries().empty());
+
+    CHECK(registry.unload(path).ok());
+    CHECK(registry.ocr_engines().empty());
+    CHECK(registry.module_paths().empty());
+    CHECK(!maps_contain(path));
+    CHECK(!registry.unload(path).ok());
+
+    registry.load();
+    CHECK(registry.ocr_engines().size() == 1);
+    CHECK(registry.module_paths().size() == 1);
+
+    gekko::yomi::Registry limited;
+    limited.limit_ocr_engines({});
+    limited.load();
+    CHECK(limited.ocr_engines().empty());
+    CHECK(limited.module_paths().size() == 1);
+    CHECK(limited.create_instance("probe").ok());
+    CHECK(limited.ocr_engines().size() == 1);
+}
+
+void test_ocr_stop_closes_worker() {
+    const char* script = std::getenv("GEKKO_YOMI_FAKE_WORKER");
+    CHECK(script != nullptr);
+    if (script == nullptr) {
+        return;
+    }
+    gekko::yomi::ocr_worker::PythonOcrSpec spec;
+    spec.id = "meiki";
+    spec.description = "fixture";
+    spec.model = "fixture";
+    spec.character_boxes = true;
+    spec.script_env = "GEKKO_YOMI_FAKE_WORKER";
+    spec.script_filename = "fake_ocr_worker.py";
+    gekko::yomi::ocr_worker::PythonOcrEngine engine(std::move(spec));
+    CHECK(engine.runtime() == &engine);
+    CHECK(engine.status().state == gekko::yomi::RuntimeState::Stopped);
+    const auto started = engine.start();
+    if (!started.ok()) {
+        std::cerr << started.error << '\n';
+    }
+    CHECK(started.ok());
+    if (!started.ok()) {
+        return;
+    }
+    CHECK(engine.status().state == gekko::yomi::RuntimeState::Running);
+    CHECK(engine.start().ok());
+    gekko::yomi::Frame frame;
+    frame.width = 2;
+    frame.height = 1;
+    frame.stride_bytes = 8;
+    frame.pixels = {1, 2, 3, 255, 4, 5, 6, 255};
+    const auto pass = engine.recognize(frame, {});
+    if (!pass.ok()) {
+        std::cerr << pass.error << '\n';
+    }
+    CHECK(pass.ok());
+    if (pass.ok() && pass.value && !pass.value->runs.empty()) {
+        CHECK(pass.value->runs.front().text == "漢字");
+    }
+    engine.stop();
+    CHECK(engine.status().state == gekko::yomi::RuntimeState::Stopped);
+    const auto restarted = engine.start();
+    if (!restarted.ok()) {
+        std::cerr << restarted.error << '\n';
+    }
+    CHECK(restarted.ok());
+    CHECK(engine.status().state == gekko::yomi::RuntimeState::Running);
+    engine.stop();
+    CHECK(engine.status().state == gekko::yomi::RuntimeState::Stopped);
+}
+
 void test_wayland_runs_same_geometry() {
     if (std::getenv("WAYLAND_DISPLAY") == nullptr) {
         std::cerr << "SKIP no WAYLAND_DISPLAY\n";
@@ -1452,6 +1612,8 @@ int main(int argc, char** argv) {
         test_result();
         test_registry_loads_fake();
         test_registry_reports_missing_symbol();
+        test_plugin_lifetime();
+        test_ocr_stop_closes_worker();
         test_explicit_plugin_path_replaces_defaults();
         test_ocr_buffer();
         test_core_config_file();

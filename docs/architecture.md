@@ -1,6 +1,6 @@
 # Architecture
 
-How the process is put together today, and the plan for loading and unloading plugins. The plan is not implemented. The refactor waits on a review of this file.
+How the process is put together, including how plugins load and unload.
 
 The product roadmap is [roadmap.md](roadmap.md). This file is the map of the running process.
 
@@ -23,7 +23,7 @@ The product roadmap is [roadmap.md](roadmap.md). This file is the map of the run
 `main` in `src/app/main.cpp`:
 
 1. `init_logging()`. Logs go to stderr. The pattern is time, logger name, level, message.
-2. `Registry::load()`. This is the only plugin load.
+2. If `core.json` sets `ocr.engines`, `Registry::limit_ocr_engines` runs with that list. Then `Registry::load()`. Engines named by the list are the ones constructed. Omit the key and every factory that succeeds is constructed. An empty list constructs none. The `.so` files still load either way.
 3. Log each loaded capture, OCR, reading, and dictionary plugin. Load failures were stored and are logged here. They are not printed from inside `dlopen`.
 4. Listen on `0.0.0.0`. `GEKKO_YOMI_PORT` if set, otherwise the first free port from 8765 through 8775.
 5. Write one flushed stdout line, `http://127.0.0.1:PORT`, then `HttpServer::run()`.
@@ -46,7 +46,7 @@ The server keeps one `OcrConsensus` for the window id it is reading. A new id cl
 `read_window` in `src/app/compose.cpp` is the scan.
 
 1. The first `CaptureSource` lists windows and grabs the requested id.
-2. Every loaded `OcrEngine` runs on that frame. Two or more engines run on separate threads and are joined before the function continues. One engine runs on the server thread.
+2. Every constructed `OcrEngine` runs on that frame. When the server was given an engine list, an id that is not on it is skipped. Two or more engines run on separate threads and are joined before the function continues. One engine runs on the server thread. `read_window` holds `begin_scan` / `end_scan` for the whole call, so a plugin cannot be unloaded while that scan is on the stack.
 3. Latin letters are stripped. A run that is only numbers or symbols is dropped.
 4. When the server passed a buffer, each engine's runs update that engine's buffer, then the consensus buffer. A null buffer returns this scan's runs directly. Tests use that.
 5. The first `ReadingProvider`, if one is loaded, splits the line. The first `Dictionary`, if one is loaded, glosses those parts.
@@ -71,52 +71,25 @@ Directories, in order:
 
 A missing directory is skipped. Each regular `.so` is opened with `dlopen(path, RTLD_NOW | RTLD_LOCAL)`. `RTLD_NOW` resolves symbols immediately, so a broken plugin fails at load instead of on the first scan. A missing `gekko_yomi_register` is recorded in `load_errors` and that handle is closed. A library that loads does not prevent the next one from loading.
 
-The interfaces live in `include/gekko_yomi/`. Each one has `id()`, `description()`, and the operation the scan or a later feature calls. The ones with an implementation today are `CaptureSource` (KWin), `OcrEngine` (meiki, ppocr-manga), `ReadingProvider` (kakasi), and `Dictionary` (TSV, and only when `GEKKO_YOMI_DICTIONARY` is set). The others are the contracts for later features. The roadmap names them.
+The interfaces live in `include/gekko_yomi/`. Each one has `id()`, `description()`, and the operation the scan or a later feature calls. The ones with an implementation today are `CaptureSource` (KWin), `OcrEngine` (meiki, ppocr-manga), `ReadingProvider` (kakasi), and `Dictionary` (TSV). The dictionary factory declines when `GEKKO_YOMI_DICTIONARY` is unset. The `.so` stays mapped, and the error is recorded. It is not a failed `dlopen`. The other interfaces are the contracts for later features. The roadmap names them.
 
-## Loading today
+`Host::add` still takes a finished object. In-process tests use it. Shipped plugins and the test `.so` files use `register_*` only. An `add` that happens during `gekko_yomi_register` is recorded on that module, so unloading the module destroys it too.
 
-`gekko_yomi_register` constructs an object and gives it away:
+`RTLD_LOCAL` plus a static copy of the core inside a plugin means `dynamic_cast` from the app to a plugin type is the wrong tool. The cast can fail even when the object really is that type, because the two libraries can each carry their own type information. Virtual calls through the base class are the calls that are safe. Nothing here uses `dynamic_cast`.
 
-```cpp
-void gekko_yomi_register(Host* host) {
-    host->add(std::make_unique<PythonOcrEngine>(...));
-}
-```
+## Three lifetimes
 
-`Host::add` takes ownership of that `unique_ptr`. After `add` returns, the plugin does not keep the object. The registry stores it in a typed list (`ocr_engines_`, and the same for the other interfaces). That part of the guess was right: registration installs a live instance, not a recipe for making one later.
+A library, an instance, and a runtime are three different lifetimes.
 
-What already matches the RAII shape, and only at process exit:
+**Library.** The `.so` is mapped. One module object per successful `dlopen` owns the handle. Creating the module loads the library and calls `gekko_yomi_register`. Destroying the module destroys every instance that came from it, drops the factories, then `dlclose`s. That is the RAII pair: construction loads, destruction unloads. The registry owns the modules. `Registry::unload(path)` does this to one module and leaves the others mapped. The registry destructor does it for every module. `SIGKILL` does not run destructors. The server does not catch `SIGTERM`.
 
-1. `Registry`'s destructor destroys every instance first. That runs the C++ destructor in the plugin, which is still mapped, so the code is still there.
-2. Then it `dlclose`s each handle.
-
-An OCR engine's destructor destroys its `WorkerSession`, and that destructor closes the Python process. The reading plugin does the same with its text worker. So a normal return from `main` does unload everything, in a safe order. `SIGKILL` does not run destructors. Nothing in the server catches `SIGTERM` either.
-
-What is not possible while the process is running:
-
-- Unload one `.so` and keep the others.
-- Destroy one engine and create it again later. `register` is not called a second time. Calling it again on a library that is still open would `add` a second instance.
-- Stop a Python worker without destroying the process. The worker starts on the first `recognize` or `analyze`, not in the constructor. It stops only when the engine object is destroyed, which is process exit. Skipping a later `recognize` call would leave a worker that had already started.
-
-KWin does not hold a D-Bus connection on the object. It opens one for the list or grab call and drops it when that call returns. The expensive long-lived runtimes today are the Python workers.
-
-In-process tests call `Host::add` with an object built inside the test binary. They never `dlopen`. That path has to stay. A factory-only boot would make those tests build a `.so` for every fake.
-
-`RTLD_LOCAL` plus a static copy of the core inside a plugin means `dynamic_cast` from the app to a plugin type is the wrong tool. The cast can fail even when the object really is that type, because the two libraries can each carry their own type information. Virtual calls through the base class are the calls that are safe. The plan below does not use `dynamic_cast`.
-
-## Load and unload plan
-
-Three different lifetimes are being treated as one. Split them.
-
-**Library.** The `.so` is mapped. A `PluginModule` object owns the `dlopen` handle. Creating the module loads the library and calls `gekko_yomi_register`. Destroying the module destroys every instance that came from it, drops the factories, then `dlclose`s. That is the RAII pair: construction loads, destruction unloads. The registry owns the modules. Its destructor already has the right order. The new part is doing that to one module while the others stay.
-
-**Instance.** One `OcrEngine`, one `CaptureSource`, and so on. The plugin does not construct it during register. It registers a descriptor and a factory. The host calls the factory when it wants an instance, and it owns the `unique_ptr`. Destroying that pointer unloads the instance. For an OCR engine that also stops the Python worker, because the worker is a member and its destructor already closes the process.
+**Instance.** One `OcrEngine`, one `CaptureSource`, and so on. The plugin does not construct it during register. It registers a descriptor and a factory. The host calls the factory and owns the `unique_ptr`. `Registry::release_instance(id)` stops that object's runtime and destroys it. The factory stays. `Registry::create_instance(id)` calls the factory again, so turning an engine back on is not another `dlopen`. For an OCR engine, destroying the instance also stops the Python worker, because the session is a member and its destructor closes the process.
 
 **Runtime.** The long-lived resource inside an instance: a Python process, later a model kept in memory, later a D-Bus connection held open on purpose. The instance can exist while the runtime is stopped. `start`, `stop`, and `status` are for that, not for `dlopen`.
 
-`start` may be called more than once and must be safe the second time. `stop` releases the resource and leaves the C++ object usable. `status` reports stopped, running, or failed, plus a short error string when it failed. `recognize` and `analyze` keep today's behavior of calling `start` when the runtime is stopped, so the first scan still brings the worker up. `stop` is what a disable uses so the CPU and the process actually go away. The destructor calls `stop`, so destroying the instance cannot leak the worker if the caller skipped `stop`.
+`start` may be called more than once and must succeed when the runtime is already running. `stop` releases the resource and leaves the C++ object usable. `status` reports `Stopped`, `Running`, or `Failed`, plus a short error string when it failed. It is not const: a status check reaps a worker that has already exited. `recognize` and `analyze` call `start` when the runtime is stopped, so the first scan still brings the worker up. `stop` is what a disable uses so the CPU and the process actually go away. The destructor calls `stop`, so destroying the instance cannot leak the worker if the caller skipped `stop`.
 
-Interfaces with nothing to start (a capture source that opens D-Bus per call, a dictionary that is just a table) leave the runtime empty. A virtual `runtime()` on each existing interface returns null by default. The OCR and reading plugins override it and return themselves. That is a normal virtual call. It does not need `dynamic_cast`.
+KWin does not hold a D-Bus connection on the object. It opens one for the list or grab call and drops it when that call returns. The dictionary is a table. Those interfaces leave `runtime()` empty: the virtual method returns null by default. OCR and reading override it and return themselves. That is a normal virtual call.
 
 ### What a plugin registers
 
@@ -128,7 +101,7 @@ The factory is a function pointer. A lambda that captures nothing converts to a 
 extern "C" void gekko_yomi_register(Host* host) {
     host->register_ocr(
         OcrDescriptor{"meiki", "meikiocr worker (BGRA in, text runs out)", true},
-        []() -> std::unique_ptr<OcrEngine> {
+        [](std::string*) -> std::unique_ptr<OcrEngine> {
             return std::make_unique<PythonOcrEngine>(/* the same spec as today */);
         });
 }
@@ -140,42 +113,30 @@ One `register_*` per interface, next to the `add` overload that already exists. 
 
 `Host::add` stays for tests and for anything the host built itself. Plugins shipped in `plugins/` use `register_*` only.
 
-A factory may decline. The dictionary plugin currently returns from `gekko_yomi_register` without calling `add` when `GEKKO_YOMI_DICTIONARY` is unset, but the `.so` stays mapped with no record of why. After the change it still registers, and the factory returns no object plus an error string when the path is unset. The host records that error and does not treat it as a failed `dlopen`.
+A factory may decline. It returns a null `unique_ptr` and writes the reason into the `std::string*` argument. The dictionary factory does that when `GEKKO_YOMI_DICTIONARY` is unset. The host records the error, keeps the factory, and does not treat it as a failed `dlopen`. Calling `create_instance` later tries the factory again.
 
-Two factories with the same id are a load error. The second is not created. Today the host does not check.
+Two factories with the same id are a load error. The second is not stored and not created. The first factory stays.
 
 ### Unload order
 
 Unload of one module, on the server thread, and only when no scan is using that module:
 
-1. Do not start a new call on its instances.
+1. Fail if a scan is on the stack.
 2. `stop` each runtime, then destroy each instance. The destructor repeats `stop`.
 3. Drop the factory pointer.
 4. `dlclose`.
 
-The scan joins every OCR thread before `read_window` returns, and the server handles one request at a time. So "no scan is using it" is true between requests, as long as unload runs on that same thread. The first implementation does only that. It does not unload from a Qt thread or from inside `recognize`. If a later UI thread asks for an unload during a scan, the host queues it and runs the four steps after the scan joins. That queue is not part of the first refactor. The rule that makes the first one safe is: unload runs where `read_window` runs, and not while it is on the stack.
+`read_window` calls `begin_scan` on entry and `end_scan` when it returns. The scan joins every OCR thread before that return, and the server handles one request at a time. `unload`, `release_instance`, and `create_instance` fail while a scan is on the stack. They are meant to run on the server thread, between requests. They do not run from inside `recognize`, and there is no queue for a request that arrives from another thread during a scan. A later UI thread would need that queue before it could unload mid-scan.
 
-Disabling an engine in settings is the instance and the runtime, not the library. The `.so` stays mapped, so enabling it again is a factory call, not another `dlopen`. That is the operation that frees the ppocr worker. Unmapping the file is for removing the plugin, and for process exit.
+Disabling an engine is the instance and the runtime, not the library. `ocr.engines` in `core.json` chooses which OCR factories are called at boot. An engine left out is never started, and its worker does not run. The `.so` stays mapped. Turning one off later without leaving the process is `release_instance`. Turning it back on is `create_instance`. That is the operation that frees the ppocr worker. Unmapping the file is `unload`, and process exit.
 
-At boot the host still creates one instance per factory that succeeds, which matches today's "everything that registered is live" behavior. A setting that names a subset creates only those instances. An instance left out is never started. Turning one off later is `stop`, destroy the instance, and keep the factory.
+### What this does not do
 
-### What the refactor changes, and what it does not
-
-Changes:
-
-- `gekko_yomi_register` in each shipped plugin and in the test `.so` files registers a descriptor and a factory.
-- `Registry` grows a module object per successful `dlopen`, with a way to destroy one module.
-- OCR and reading gain `start`, `stop`, `status`, with the current lazy start kept.
-- A test loads a fake plugin, creates the instance, destroys it, unloads the library, and loads it again.
-- A test checks that `stop` on the OCR engine closes the worker.
-
-Does not change:
-
-- The scan, the page, the HTTP routes, or the buffer rules.
-- `Host::add` for in-process fakes.
-- `GEKKO_YOMI_PLUGINS`, `RTLD_NOW`, and `RTLD_LOCAL`.
-- Which plugins exist.
-- The Qt window. It is still later. When it exists, it calls this host API. It does not `dlopen` itself.
-- A file watcher that loads a `.so` dropped into `plugins/` while the process is up. `PluginModule` is the API that would use. The first refactor does not watch the directory.
+- The scan, the page, the HTTP routes, and the buffer rules are unchanged.
+- `Host::add` for in-process fakes stays.
+- `GEKKO_YOMI_PLUGINS`, `RTLD_NOW`, and `RTLD_LOCAL` stay.
+- The set of plugins is unchanged.
+- The Qt window is still later. When it exists, it calls this host API. It does not `dlopen` itself.
+- Nothing watches `plugins/` for a `.so` dropped in while the process is up. `unload` and `load` are the calls that would use.
 
 The core still does not link Qt. Plugin code still reaches the host only through `gekko_yomi_register` and the virtual calls on the interfaces.

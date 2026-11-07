@@ -307,6 +307,11 @@ void attach_language(Registry& registry, RunView* run, std::string* reading_erro
 
 ReadView read_window(Registry& registry, std::string_view window_id, OcrConsensus* memory,
                      const std::vector<std::string>* enabled_ocr) {
+    struct ScanGuard {
+        Registry* registry;
+        explicit ScanGuard(Registry& registry) : registry(&registry) { registry.begin_scan(); }
+        ~ScanGuard() { registry->end_scan(); }
+    } guard(registry);
     const auto started = std::chrono::steady_clock::now();
     ReadView view;
     view.window_id = std::string(window_id);
