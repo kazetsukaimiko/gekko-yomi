@@ -9,6 +9,8 @@
 
 namespace gekko::yomi {
 
+class Runtime;
+
 // One morpheme of a line.
 // start_byte and end_byte are UTF-8 offsets into the surface that was
 // passed to analyze. end_byte is exclusive.
@@ -24,6 +26,8 @@ struct Morpheme {
 class ReadingProvider {
 public:
     virtual ~ReadingProvider() = default;
+
+    virtual Runtime* runtime() { return nullptr; }
 
     virtual std::string id() const = 0;
     virtual std::string description() const = 0;

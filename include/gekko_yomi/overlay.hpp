@@ -9,6 +9,8 @@
 
 namespace gekko::yomi {
 
+class Runtime;
+
 // A reading placed where the kanji is, in overlay logical pixels.
 // Built by the core from OCR boxes, morphemes, and a FrameMapping.
 struct PlacedReading {
@@ -31,6 +33,8 @@ class Presenter {
 public:
     virtual ~Presenter() = default;
 
+    virtual Runtime* runtime() { return nullptr; }
+
     virtual std::string id() const = 0;
     virtual std::string description() const = 0;
 
@@ -44,6 +48,8 @@ public:
 class Overlay {
 public:
     virtual ~Overlay() = default;
+
+    virtual Runtime* runtime() { return nullptr; }
 
     virtual std::string id() const = 0;
     virtual std::string description() const = 0;

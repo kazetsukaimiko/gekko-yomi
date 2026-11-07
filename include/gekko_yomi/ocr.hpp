@@ -8,6 +8,8 @@
 
 namespace gekko::yomi {
 
+class Runtime;
+
 // One character (or one grapheme the engine treats as a unit) and where
 // it sits in the frame. Coordinates are image pixels.
 struct CharBox {
@@ -45,6 +47,8 @@ struct OcrPass {
 class OcrEngine {
 public:
     virtual ~OcrEngine() = default;
+
+    virtual Runtime* runtime() { return nullptr; }
 
     virtual std::string id() const = 0;
     virtual std::string description() const = 0;

@@ -31,18 +31,47 @@ Rect box_from_json(const Json& value) {
 
 PythonOcrEngine::PythonOcrEngine(PythonOcrSpec spec) : spec_(std::move(spec)) {}
 
+PythonOcrEngine::~PythonOcrEngine() { stop(); }
+
 std::string PythonOcrEngine::id() const { return spec_.id; }
 
 std::string PythonOcrEngine::description() const { return spec_.description; }
 
 bool PythonOcrEngine::provides_character_boxes() const { return spec_.character_boxes; }
 
-Result<OcrPass> PythonOcrEngine::recognize(const Frame& frame, const OcrRequest&) {
-    std::string error;
-    if (!session_.running() &&
-        !session_.start(default_python(), worker_script(spec_.script_env, spec_.script_filename), &error)) {
-        return Result<OcrPass>::failure(error);
+Status PythonOcrEngine::start() {
+    if (session_.running()) {
+        return Status::success();
     }
+    std::string error;
+    if (!session_.start(default_python(), worker_script(spec_.script_env, spec_.script_filename), &error)) {
+        last_error_ = error;
+        return Status::failure(error);
+    }
+    last_error_.clear();
+    return Status::success();
+}
+
+void PythonOcrEngine::stop() {
+    session_.close();
+    last_error_.clear();
+}
+
+RuntimeStatus PythonOcrEngine::status() {
+    if (session_.running()) {
+        return RuntimeStatus{RuntimeState::Running, {}};
+    }
+    if (!last_error_.empty()) {
+        return RuntimeStatus{RuntimeState::Failed, last_error_};
+    }
+    return RuntimeStatus{RuntimeState::Stopped, {}};
+}
+
+Result<OcrPass> PythonOcrEngine::recognize(const Frame& frame, const OcrRequest&) {
+    if (const Status began = start(); !began.ok()) {
+        return Result<OcrPass>::failure(began.error);
+    }
+    std::string error;
     if (frame.width <= 0 || frame.height <= 0 || frame.stride_bytes < frame.width * 4) {
         return Result<OcrPass>::failure("frame has no pixels");
     }
@@ -57,6 +86,7 @@ Result<OcrPass> PythonOcrEngine::recognize(const Frame& frame, const OcrRequest&
     // First-run weight download can take a while. Later calls are the model.
     const auto line = session_.request(header, frame.pixels.data(), nbytes, 180000, &error);
     if (!line) {
+        last_error_ = error;
         session_.close();
         return Result<OcrPass>::failure(error);
     }

@@ -9,12 +9,16 @@
 
 namespace gekko::yomi {
 
+class Runtime;
+
 // Lists windows and returns their pixels.
 // The first implementation is KWin ScreenShot2. PipeWire / the desktop
 // portal is another implementation for compositors that are not KWin.
 class CaptureSource {
 public:
     virtual ~CaptureSource() = default;
+
+    virtual Runtime* runtime() { return nullptr; }
 
     virtual std::string id() const = 0;
     virtual std::string description() const = 0;

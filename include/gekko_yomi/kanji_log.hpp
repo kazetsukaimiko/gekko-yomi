@@ -10,6 +10,8 @@
 
 namespace gekko::yomi {
 
+class Runtime;
+
 // One remembered lookup. The embedded database behind this is not part of
 // the web MVP. The interface is here so the page can call it later
 // without a second design.
@@ -25,6 +27,8 @@ struct LogEntry {
 class KanjiLog {
 public:
     virtual ~KanjiLog() = default;
+
+    virtual Runtime* runtime() { return nullptr; }
 
     virtual std::string id() const = 0;
     virtual std::string description() const = 0;
