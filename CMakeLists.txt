@@ -43,6 +43,7 @@ find_package(spdlog CONFIG REQUIRED)
 add_library(gekko_yomi_app STATIC
     src/app/bmp.cpp
     src/app/compose.cpp
+    src/app/config.cpp
     src/app/http_server.cpp
     src/app/log.cpp
     src/app/page.cpp
@@ -51,9 +52,25 @@ target_include_directories(gekko_yomi_app PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src
 target_link_libraries(gekko_yomi_app PUBLIC gekko_yomi_core gekko_yomi_json Threads::Threads spdlog::spdlog)
 target_compile_options(gekko_yomi_app PRIVATE -Wall -Wextra -Wpedantic)
 
+include(FetchContent)
+if(POLICY CMP0135)
+    cmake_policy(SET CMP0135 NEW)
+endif()
+FetchContent_Declare(
+    cli11
+    URL https://github.com/CLIUtils/CLI11/archive/refs/tags/v2.7.2.tar.gz
+    URL_HASH SHA256=46eef3101da70852ec7af026e09d485ccee81813331c8c6052d39344443b83da
+)
+set(CLI11_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(CLI11_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(CLI11_BUILD_DOCS OFF CACHE BOOL "" FORCE)
+set(CLI11_PRECOMPILED OFF CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(cli11)
+
 add_executable(gekko-yomi src/app/main.cpp)
 target_compile_options(gekko-yomi PRIVATE -Wall -Wextra -Wpedantic)
-target_link_libraries(gekko-yomi PRIVATE gekko_yomi_app)
+target_compile_definitions(gekko-yomi PRIVATE GEKKO_YOMI_VERSION="${PROJECT_VERSION}")
+target_link_libraries(gekko-yomi PRIVATE gekko_yomi_app CLI11::CLI11)
 add_custom_command(TARGET gekko-yomi POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/workers
     COMMAND ${CMAKE_COMMAND} -E copy_if_different

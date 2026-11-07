@@ -65,8 +65,11 @@ OcrBuffer::OcrBuffer(OcrBufferOptions options) : options_(options) {
     if (options_.history < 1) {
         options_.history = 1;
     }
-    if (options_.ttl_scans < 0) {
-        options_.ttl_scans = 0;
+    if (options_.ttl_scans < 1) {
+        options_.ttl_scans = 1;
+    }
+    if (options_.positional_invalidation_scans < 1) {
+        options_.positional_invalidation_scans = 1;
     }
 }
 
@@ -212,7 +215,7 @@ std::vector<TextRun> OcrBuffer::observe(const std::vector<TextRun>& runs, const 
                 track.last_seen = scan_;
             }
         }
-        if (scan_ - track.last_seen > options_.ttl_scans) {
+        if (scan_ - track.last_seen >= options_.positional_invalidation_scans) {
             continue;
         }
         std::sort(track.history.begin(), track.history.end(), [](const Reading& left, const Reading& right) {
@@ -263,6 +266,11 @@ void OcrBuffer::choose_shown(Track* track) const {
     };
     std::vector<Candidate> candidates;
     for (const auto& reading : track->history) {
+        // Old hits stay in history so a new line still has to agree for
+        // promote_after scans. They stop adding votes once ttl_scans is up.
+        if (scan_ - reading.scan >= options_.ttl_scans) {
+            continue;
+        }
         if (contained(reading)) {
             continue;
         }
@@ -400,11 +408,13 @@ void OcrBuffer::clear() {
     next_order_ = 0;
 }
 
-OcrConsensus::OcrConsensus() : consensus_(([] {
-                                             OcrBufferOptions options;
-                                             options.promote_after = 1;
-                                             return options;
-                                         })()) {}
+OcrConsensus::OcrConsensus(OcrBufferOptions options)
+    : engine_options_(options), consensus_(([&options] {
+          OcrBufferOptions consensus_options = options;
+          // The engines already waited promote_after. This step only merges.
+          consensus_options.promote_after = 1;
+          return consensus_options;
+      })()) {}
 
 std::vector<TextRun> OcrConsensus::observe(const std::vector<EngineScan>& engines) {
     std::vector<TextRun> shown_runs;

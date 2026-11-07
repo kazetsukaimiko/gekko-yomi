@@ -3,6 +3,7 @@
 #include "gekko_yomi/result.hpp"
 #include "bmp.hpp"
 #include "compose.hpp"
+#include "config.hpp"
 #include "http_server.hpp"
 #include "page.hpp"
 #include "json_mini.hpp"
@@ -1091,6 +1092,343 @@ void test_ocr_buffer() {
     CHECK(either.size() == 1);
     CHECK(places_across.observe({{"meiki", {}}, {"other", {}}}).size() == 1);
     CHECK(places_across.observe({{"meiki", {}}, {"other", {}}}).empty());
+
+    gekko::yomi::OcrBufferOptions defaults;
+    CHECK(defaults.ttl_scans == 8);
+    CHECK(defaults.positional_invalidation_scans == 2);
+
+    const auto old_line = sample_line("古い文", 0, 0, 80, 20);
+    const auto new_line = sample_line("新", 0, 0, 80, 20);
+    gekko::yomi::OcrBufferOptions fade;
+    fade.promote_after = 1;
+    fade.ttl_scans = 1;
+    fade.positional_invalidation_scans = 4;
+    gekko::yomi::OcrConsensus faded(fade);
+    const auto faded_first = faded.observe({{"meiki", {old_line}}});
+    CHECK(faded_first.size() == 1);
+    if (!faded_first.empty()) {
+        CHECK(faded_first[0].text == old_line.text);
+    }
+    faded.observe({{"meiki", {old_line}}});
+    faded.observe({{"meiki", {old_line}}});
+    const auto replaced = faded.observe({{"meiki", {new_line}}});
+    CHECK(replaced.size() == 1);
+    if (!replaced.empty()) {
+        CHECK(replaced[0].text == new_line.text);
+    }
+
+    gekko::yomi::OcrBufferOptions sticky_options;
+    sticky_options.promote_after = 1;
+    sticky_options.ttl_scans = 8;
+    gekko::yomi::OcrConsensus sticky(sticky_options);
+    const auto sticky_first = sticky.observe({{"meiki", {old_line}}});
+    CHECK(sticky_first.size() == 1);
+    if (!sticky_first.empty()) {
+        CHECK(sticky_first[0].text == old_line.text);
+    }
+    sticky.observe({{"meiki", {old_line}}});
+    sticky.observe({{"meiki", {old_line}}});
+    const auto still_old = sticky.observe({{"meiki", {new_line}}});
+    CHECK(still_old.size() == 1);
+    if (!still_old.empty()) {
+        CHECK(still_old[0].text == old_line.text);
+    }
+
+    gekko::yomi::OcrBufferOptions once;
+    once.promote_after = 1;
+    once.positional_invalidation_scans = 1;
+    gekko::yomi::OcrBuffer strict(once);
+    CHECK(strict.observe({sample_line("上", 0, 0, 20, 20)}).size() == 1);
+    CHECK(strict.observe({}).empty());
+
+    gekko::yomi::OcrBufferOptions loose_options;
+    loose_options.promote_after = 1;
+    loose_options.positional_invalidation_scans = 3;
+    gekko::yomi::OcrBuffer loose(loose_options);
+    CHECK(loose.observe({sample_line("上", 0, 0, 20, 20)}).size() == 1);
+    CHECK(loose.observe({}).size() == 1);
+    CHECK(loose.observe({}).size() == 1);
+    CHECK(loose.observe({}).empty());
+}
+
+class NamedOcr final : public gekko::yomi::OcrEngine {
+public:
+    NamedOcr(std::string id, std::string text) : id_(std::move(id)), text_(std::move(text)) {}
+
+    std::string id() const override { return id_; }
+    std::string description() const override { return "scripted"; }
+    bool provides_character_boxes() const override { return false; }
+
+    gekko::yomi::Result<gekko::yomi::OcrPass> recognize(const gekko::yomi::Frame&,
+                                                        const gekko::yomi::OcrRequest&) override {
+        gekko::yomi::OcrPass pass;
+        pass.engine_id = id_;
+        gekko::yomi::TextRun run;
+        run.text = text_;
+        run.box = {0, 0, 10, 10};
+        pass.runs.push_back(std::move(run));
+        return gekko::yomi::Result<gekko::yomi::OcrPass>::success(std::move(pass));
+    }
+
+private:
+    std::string id_;
+    std::string text_;
+};
+
+void test_core_config_file() {
+    const char* home = std::getenv("HOME");
+    const auto path = gekko::yomi::default_core_config_path();
+    if (home != nullptr && home[0] != '\0') {
+        CHECK(path == std::string(home) + "/.config/gekko-yomi/core.json");
+    }
+    unsetenv("HOME");
+    CHECK(gekko::yomi::default_core_config_path().empty());
+    if (home != nullptr) {
+        setenv("HOME", home, 1);
+    }
+
+    const auto missing = std::filesystem::temp_directory_path() / "gekko-yomi-missing-core.json";
+    std::filesystem::remove(missing);
+    const auto absent = gekko::yomi::load_core_config(missing.string(), false);
+    CHECK(absent.ok());
+    CHECK(absent.used_defaults);
+    CHECK(absent.config.buffer.ttl_scans == 8);
+    CHECK(!absent.config.ocr_engines.has_value());
+    const auto required = gekko::yomi::load_core_config(missing.string(), true);
+    CHECK(!required.ok());
+
+    const auto dir = std::filesystem::temp_directory_path() / "gekko-yomi-core-config";
+    std::filesystem::create_directories(dir);
+    const auto file = dir / "core.json";
+    {
+        std::ofstream out(file);
+        out << "{\n"
+            << "  \"buffer\": {\"ttl_scans\": 3, \"positional_invalidation_scans\": 4},\n"
+            << "  \"ocr\": {\"engines\": [\"meiki\"]},\n"
+            << "  \"later\": true\n"
+            << "}\n";
+    }
+    const auto parsed = gekko::yomi::load_core_config(file.string(), true);
+    CHECK(parsed.ok());
+    CHECK(!parsed.used_defaults);
+    CHECK(parsed.config.buffer.ttl_scans == 3);
+    CHECK(parsed.config.buffer.positional_invalidation_scans == 4);
+    CHECK(parsed.config.ocr_engines.has_value());
+    if (parsed.config.ocr_engines) {
+        CHECK(parsed.config.ocr_engines->size() == 1);
+        CHECK(parsed.config.ocr_engines->front() == "meiki");
+    }
+    CHECK(!parsed.warnings.empty());
+
+    {
+        std::ofstream out(file);
+        out << "{\"ocr\":{\"engines\":[]}}";
+    }
+    const auto none = gekko::yomi::load_core_config(file.string(), true);
+    CHECK(none.ok());
+    CHECK(none.config.ocr_engines.has_value());
+    CHECK(none.config.ocr_engines->empty());
+    CHECK(none.config.buffer.ttl_scans == 8);
+
+    {
+        std::ofstream out(file);
+        out << "{\"buffer\":{\"ttl_scans\":1.5}}";
+    }
+    CHECK(!gekko::yomi::load_core_config(file.string(), true).ok());
+    {
+        std::ofstream out(file);
+        out << "{\"buffer\":{\"ttl_scans\":0}}";
+    }
+    CHECK(!gekko::yomi::load_core_config(file.string(), true).ok());
+    {
+        std::ofstream out(file);
+        out << "{";
+    }
+    CHECK(!gekko::yomi::load_core_config(file.string(), false).ok());
+    {
+        std::ofstream out(file);
+        out << "{\"ocr\":{\"engines\":[\"\"]}}";
+    }
+    CHECK(!gekko::yomi::load_core_config(file.string(), true).ok());
+}
+
+void test_enabled_engines() {
+    gekko::yomi::Registry registry;
+    registry.add(std::make_unique<FixtureCapture>());
+    registry.add(std::make_unique<NamedOcr>("meiki", "漢字"));
+    registry.add(std::make_unique<NamedOcr>("ppocr-manga", "日本語"));
+
+    const auto both = gekko::yomi::read_window(registry, "window-1");
+    CHECK(both.ocr_error.empty());
+    CHECK(both.engine_id == "meiki+ppocr-manga");
+    CHECK(both.runs.size() == 2);
+    if (both.runs.size() == 2) {
+        CHECK(both.runs[0].text == "日本語");
+        CHECK(both.runs[1].text == "漢字");
+    }
+
+    const std::vector<std::string> only{"meiki"};
+    const auto filtered = gekko::yomi::read_window(registry, "window-1", nullptr, &only);
+    CHECK(filtered.engine_id == "meiki");
+    CHECK(filtered.runs.size() == 1);
+    if (!filtered.runs.empty()) {
+        CHECK(filtered.runs[0].text == "漢字");
+    }
+
+    const std::vector<std::string> none;
+    const auto disabled = gekko::yomi::read_window(registry, "window-1", nullptr, &none);
+    CHECK(disabled.runs.empty());
+    CHECK(disabled.ocr_error.find("enabled") != std::string::npos);
+
+    gekko::yomi::OcrBufferOptions buffer;
+    buffer.promote_after = 1;
+    gekko::yomi::HttpServer server(&registry, buffer, only);
+    std::string error;
+    CHECK(server.listen(0, &error));
+    if (server.port() == 0) {
+        std::cerr << error << '\n';
+        return;
+    }
+    std::thread thread([&server]() { server.run(); });
+    const std::string body = "{\"window_id\":\"window-1\"}";
+    const std::string request = "POST /api/read HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\n"
+                                 "Content-Length: " +
+                                 std::to_string(body.size()) + "\r\nConnection: close\r\n\r\n" + body;
+    const std::string read = http_exchange(server.port(), request);
+    CHECK(read.find("\"engine\":\"meiki\"") != std::string::npos);
+    CHECK(read.find("漢字") != std::string::npos);
+    CHECK(read.find("ppocr-manga") == std::string::npos);
+    CHECK(read.find("日本語") == std::string::npos);
+    server.stop();
+    thread.join();
+}
+
+struct ChildRun {
+    int status{0};
+    std::string output;
+    bool finished{false};
+};
+
+ChildRun run_gekko(const std::vector<std::string>& args) {
+    ChildRun run;
+    const char* app = std::getenv("GEKKO_YOMI_APP");
+    if (app == nullptr) {
+        return run;
+    }
+    int pipefd[2];
+    if (pipe(pipefd) != 0) {
+        return run;
+    }
+    const pid_t pid = fork();
+    if (pid < 0) {
+        close(pipefd[0]);
+        close(pipefd[1]);
+        return run;
+    }
+    if (pid == 0) {
+        dup2(pipefd[1], STDOUT_FILENO);
+        close(pipefd[0]);
+        close(pipefd[1]);
+        std::vector<char*> argv;
+        argv.push_back(const_cast<char*>(app));
+        for (const auto& arg : args) {
+            argv.push_back(const_cast<char*>(arg.c_str()));
+        }
+        argv.push_back(nullptr);
+        execv(app, argv.data());
+        _exit(127);
+    }
+    close(pipefd[1]);
+    char buf[512];
+    ssize_t n = 0;
+    while ((n = ::read(pipefd[0], buf, sizeof(buf))) > 0) {
+        run.output.append(buf, static_cast<std::size_t>(n));
+    }
+    close(pipefd[0]);
+    for (int i = 0; i < 50 && !run.finished; ++i) {
+        const pid_t done = waitpid(pid, &run.status, WNOHANG);
+        if (done == pid) {
+            run.finished = true;
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    if (!run.finished) {
+        kill(pid, SIGTERM);
+        waitpid(pid, &run.status, 0);
+    }
+    return run;
+}
+
+void test_cli_config() {
+    const char* app = std::getenv("GEKKO_YOMI_APP");
+    CHECK(app != nullptr);
+    if (app == nullptr) {
+        return;
+    }
+    const auto help = run_gekko({"--help"});
+    CHECK(help.finished);
+    CHECK(WIFEXITED(help.status));
+    CHECK(WEXITSTATUS(help.status) == 0);
+    CHECK(help.output.find("--config") != std::string::npos);
+
+    const auto missing = std::filesystem::temp_directory_path() / "gekko-yomi-cli-missing.json";
+    std::filesystem::remove(missing);
+    const auto gone = run_gekko({"--config", missing.string()});
+    CHECK(gone.finished);
+    CHECK(WIFEXITED(gone.status));
+    CHECK(WEXITSTATUS(gone.status) != 0);
+
+    const auto bad = std::filesystem::temp_directory_path() / "gekko-yomi-cli-bad.json";
+    {
+        std::ofstream out(bad);
+        out << "{";
+    }
+    const auto invalid = run_gekko({"--config", bad.string()});
+    CHECK(invalid.finished);
+    CHECK(WIFEXITED(invalid.status));
+    CHECK(WEXITSTATUS(invalid.status) != 0);
+
+    const auto good = std::filesystem::temp_directory_path() / "gekko-yomi-cli-good.json";
+    {
+        std::ofstream out(good);
+        out << "{\"buffer\":{\"ttl_scans\":5,\"positional_invalidation_scans\":2},\"ocr\":{\"engines\":[]}}";
+    }
+    const auto empty = std::filesystem::temp_directory_path() / "gekko-yomi-cli-plugins";
+    std::filesystem::create_directories(empty);
+    int pipefd[2];
+    CHECK(pipe(pipefd) == 0);
+    const pid_t pid = fork();
+    CHECK(pid >= 0);
+    if (pid == 0) {
+        dup2(pipefd[1], STDOUT_FILENO);
+        close(pipefd[0]);
+        close(pipefd[1]);
+        setenv("GEKKO_YOMI_PLUGINS", empty.c_str(), 1);
+        setenv("GEKKO_YOMI_PORT", "0", 1);
+        const std::string path = good.string();
+        execl(app, app, "--config", path.c_str(), static_cast<char*>(nullptr));
+        _exit(127);
+    }
+    close(pipefd[1]);
+    std::string line;
+    char byte = 0;
+    while (line.size() < 200) {
+        const ssize_t n = ::read(pipefd[0], &byte, 1);
+        if (n <= 0) {
+            break;
+        }
+        if (byte == '\n') {
+            break;
+        }
+        line.push_back(byte);
+    }
+    close(pipefd[0]);
+    CHECK(port_from_url(line) > 0);
+    kill(pid, SIGTERM);
+    int status = 0;
+    waitpid(pid, &status, 0);
+    CHECK(WIFSIGNALED(status) || WIFEXITED(status));
 }
 
 void test_wayland_runs_same_geometry() {
@@ -1116,6 +1454,9 @@ int main(int argc, char** argv) {
         test_registry_reports_missing_symbol();
         test_explicit_plugin_path_replaces_defaults();
         test_ocr_buffer();
+        test_core_config_file();
+        test_enabled_engines();
+        test_cli_config();
         test_app_serves_without_plugins();
         test_kwin_ids_and_pixels();
     } else if (which == "app") {

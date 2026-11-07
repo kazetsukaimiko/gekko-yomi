@@ -228,18 +228,24 @@ EngineOutcome recognize_one(OcrEngine* engine, const Frame* frame) {
     return outcome;
 }
 
-std::vector<EngineOutcome> recognize_all(const std::vector<std::unique_ptr<OcrEngine>>& engines, const Frame& frame) {
+bool engine_enabled(const std::vector<std::string>* enabled, std::string_view id) {
+    if (enabled == nullptr) {
+        return true;
+    }
+    return std::find(enabled->begin(), enabled->end(), id) != enabled->end();
+}
+
+std::vector<EngineOutcome> recognize_all(const std::vector<OcrEngine*>& engines, const Frame& frame) {
     if (engines.size() <= 1) {
         if (engines.empty()) {
             return {};
         }
-        return {recognize_one(engines.front().get(), &frame)};
+        return {recognize_one(engines.front(), &frame)};
     }
     std::vector<std::future<EngineOutcome>> jobs;
     jobs.reserve(engines.size());
-    for (const auto& engine : engines) {
-        OcrEngine* raw = engine.get();
-        jobs.push_back(std::async(std::launch::async, [raw, &frame]() { return recognize_one(raw, &frame); }));
+    for (OcrEngine* engine : engines) {
+        jobs.push_back(std::async(std::launch::async, [engine, &frame]() { return recognize_one(engine, &frame); }));
     }
     std::vector<EngineOutcome> outcomes;
     outcomes.reserve(jobs.size());
@@ -299,7 +305,8 @@ void attach_language(Registry& registry, RunView* run, std::string* reading_erro
 
 }  // namespace
 
-ReadView read_window(Registry& registry, std::string_view window_id, OcrConsensus* memory) {
+ReadView read_window(Registry& registry, std::string_view window_id, OcrConsensus* memory,
+                     const std::vector<std::string>* enabled_ocr) {
     const auto started = std::chrono::steady_clock::now();
     ReadView view;
     view.window_id = std::string(window_id);
@@ -342,17 +349,27 @@ ReadView read_window(Registry& registry, std::string_view window_id, OcrConsensu
         view.ocr_error = "no OCR engine is loaded";
         return finish();
     }
+    std::vector<OcrEngine*> active;
+    active.reserve(registry.ocr_engines().size());
     std::string engine_ids;
     for (const auto& engine : registry.ocr_engines()) {
+        if (!engine_enabled(enabled_ocr, engine->id())) {
+            continue;
+        }
+        active.push_back(engine.get());
         if (!engine_ids.empty()) {
             engine_ids += '+';
         }
         engine_ids += engine->id();
     }
+    if (active.empty()) {
+        view.ocr_error = "no OCR engine is enabled";
+        return finish();
+    }
     view.engine_id = std::move(engine_ids);
 
     const auto recognized_at = std::chrono::steady_clock::now();
-    const auto outcomes = recognize_all(registry.ocr_engines(), view.frame);
+    const auto outcomes = recognize_all(active, view.frame);
     view.timings.ocr_ms = elapsed_ms(recognized_at);
     std::vector<EngineScan> scans;
     scans.reserve(outcomes.size());
