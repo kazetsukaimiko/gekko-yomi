@@ -5,17 +5,9 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# The tray and settings window is not in the tree yet, so the default is OFF
-# and turning it on is an error. When that target exists, flip this default
-# to ON. A normal build should include the Qt window. OFF stays available
-# for a core-only build. gekko_yomi_core itself never links Qt.
-option(GEKKO_YOMI_QT_SHELL "Build the Qt6 tray and settings window" OFF)
-if(GEKKO_YOMI_QT_SHELL)
-    message(FATAL_ERROR
-        "GEKKO_YOMI_QT_SHELL is not implemented yet. "
-        "Leave it OFF until the settings window lands. "
-        "The default becomes ON at that point.")
-endif()
+# The tray and settings window live in the executable only. gekko_yomi_core
+# and gekko_yomi_app do not link Qt. OFF is the core-only build.
+option(GEKKO_YOMI_QT_SHELL "Build the Qt6 tray and settings window" ON)
 
 add_library(gekko_yomi_core
     src/core/geometry.cpp
@@ -71,6 +63,12 @@ add_executable(gekko-yomi src/app/main.cpp)
 target_compile_options(gekko-yomi PRIVATE -Wall -Wextra -Wpedantic)
 target_compile_definitions(gekko-yomi PRIVATE GEKKO_YOMI_VERSION="${PROJECT_VERSION}")
 target_link_libraries(gekko-yomi PRIVATE gekko_yomi_app CLI11::CLI11)
+if(GEKKO_YOMI_QT_SHELL)
+    find_package(Qt6 REQUIRED COMPONENTS Widgets)
+    target_sources(gekko-yomi PRIVATE src/app/qt_shell.cpp)
+    target_link_libraries(gekko-yomi PRIVATE Qt6::Widgets)
+    target_compile_definitions(gekko-yomi PRIVATE GEKKO_YOMI_QT_SHELL=1)
+endif()
 add_custom_command(TARGET gekko-yomi POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/workers
     COMMAND ${CMAKE_COMMAND} -E copy_if_different

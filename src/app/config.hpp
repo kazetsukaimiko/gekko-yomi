@@ -36,4 +36,10 @@ std::string default_core_config_path();
 // A file that exists and is not valid JSON is an error either way.
 ConfigResult load_core_config(const std::string& path, bool required);
 
+// Writes buffer.ttl_scans, buffer.positional_invalidation_scans, and, when
+// ocr_engines is set, ocr.engines. A nullopt engine list omits the ocr key,
+// which means every loaded engine. Creates parent directories. Empty string
+// means the file was replaced. The string is the error otherwise.
+std::string save_core_config(const std::string& path, const CoreConfig& config);
+
 }  // namespace gekko::yomi

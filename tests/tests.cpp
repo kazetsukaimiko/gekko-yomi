@@ -7,6 +7,7 @@
 #include "http_server.hpp"
 #include "page.hpp"
 #include "json_mini.hpp"
+#include "crescent.hpp"
 #include "window_ref.hpp"
 #include "worker_session.hpp"
 #include "python_ocr.hpp"
@@ -205,6 +206,8 @@ void test_app_serves_without_plugins() {
         close(pipefd[1]);
         setenv("GEKKO_YOMI_PLUGINS", empty.c_str(), 1);
         setenv("GEKKO_YOMI_PORT", "0", 1);
+        unsetenv("DISPLAY");
+        unsetenv("WAYLAND_DISPLAY");
         execl(app, app, static_cast<char*>(nullptr));
         _exit(127);
     }
@@ -1262,6 +1265,59 @@ void test_core_config_file() {
         out << "{\"ocr\":{\"engines\":[\"\"]}}";
     }
     CHECK(!gekko::yomi::load_core_config(file.string(), true).ok());
+
+    gekko::yomi::CoreConfig saved;
+    saved.buffer.ttl_scans = 6;
+    saved.buffer.positional_invalidation_scans = 3;
+    saved.ocr_engines = std::vector<std::string>{"meiki", "quote\"id"};
+    const auto written = dir / "saved.json";
+    CHECK(gekko::yomi::save_core_config(written.string(), saved).empty());
+    const auto round = gekko::yomi::load_core_config(written.string(), true);
+    CHECK(round.ok());
+    CHECK(round.warnings.empty());
+    CHECK(round.config.buffer.ttl_scans == 6);
+    CHECK(round.config.buffer.positional_invalidation_scans == 3);
+    CHECK(round.config.ocr_engines.has_value());
+    if (round.config.ocr_engines) {
+        CHECK(round.config.ocr_engines->size() == 2);
+        CHECK((*round.config.ocr_engines)[0] == "meiki");
+        CHECK((*round.config.ocr_engines)[1] == "quote\"id");
+    }
+    saved.ocr_engines.reset();
+    CHECK(gekko::yomi::save_core_config(written.string(), saved).empty());
+    const auto all = gekko::yomi::load_core_config(written.string(), true);
+    CHECK(all.ok());
+    CHECK(!all.config.ocr_engines.has_value());
+    CHECK(all.config.buffer.ttl_scans == 6);
+}
+
+void test_crescent_pluses() {
+    const auto marks = gekko::yomi::crescent_plus_marks();
+    CHECK(marks.size() >= 8);
+    double min_x = 1;
+    double max_x = 0;
+    double min_y = 1;
+    double max_y = 0;
+    double mean_x = 0;
+    for (const auto& mark : marks) {
+        CHECK(mark.x >= 0);
+        CHECK(mark.x <= 1);
+        CHECK(mark.y >= 0);
+        CHECK(mark.y <= 1);
+        min_x = std::min(min_x, mark.x);
+        max_x = std::max(max_x, mark.x);
+        min_y = std::min(min_y, mark.y);
+        max_y = std::max(max_y, mark.y);
+        mean_x += mark.x;
+    }
+    mean_x /= static_cast<double>(marks.size());
+    // Belly on the left, horns reaching the right, tall enough to be a crescent.
+    CHECK(mean_x < 0.5);
+    CHECK(min_x < 0.3);
+    CHECK(max_x > 0.55);
+    CHECK(min_y < 0.2);
+    CHECK(max_y > 0.8);
+    CHECK(max_x - min_x > 0.25);
 }
 
 void test_enabled_engines() {
@@ -1341,6 +1397,8 @@ ChildRun run_gekko(const std::vector<std::string>& args) {
         dup2(pipefd[1], STDOUT_FILENO);
         close(pipefd[0]);
         close(pipefd[1]);
+        unsetenv("DISPLAY");
+        unsetenv("WAYLAND_DISPLAY");
         std::vector<char*> argv;
         argv.push_back(const_cast<char*>(app));
         for (const auto& arg : args) {
@@ -1418,6 +1476,8 @@ void test_cli_config() {
         close(pipefd[1]);
         setenv("GEKKO_YOMI_PLUGINS", empty.c_str(), 1);
         setenv("GEKKO_YOMI_PORT", "0", 1);
+        unsetenv("DISPLAY");
+        unsetenv("WAYLAND_DISPLAY");
         const std::string path = good.string();
         execl(app, app, "--config", path.c_str(), static_cast<char*>(nullptr));
         _exit(127);
@@ -1617,6 +1677,7 @@ int main(int argc, char** argv) {
         test_explicit_plugin_path_replaces_defaults();
         test_ocr_buffer();
         test_core_config_file();
+        test_crescent_pluses();
         test_enabled_engines();
         test_cli_config();
         test_app_serves_without_plugins();

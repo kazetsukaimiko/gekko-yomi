@@ -19,7 +19,7 @@ A web UI on a local port.
 
 One capture implementation, for this machine. One OCR implementation, to start. The other models plug in behind the same interface.
 
-Qt is not required for the web MVP. A system-tray icon and a small settings window come later. Once that window exists, `GEKKO_YOMI_QT_SHELL` defaults to ON, so a normal build includes it. `-DGEKKO_YOMI_QT_SHELL=OFF` remains for a core-only build. The core library does not link Qt in either case. Until the window is in the tree the option stays OFF, and turning it on is an error.
+Qt is not required for the web page. A normal build also includes a system-tray icon and a small settings window (`GEKKO_YOMI_QT_SHELL` defaults to ON). `-DGEKKO_YOMI_QT_SHELL=OFF` remains for a core-only build. The core library does not link Qt in either case.
 
 ## Not the MVP
 
@@ -78,7 +78,7 @@ The OCR worker may be a separate process at first, because the published decode 
 
 ### Optional Qt shell
 
-A tray icon that opens a small settings window. When this lands, the default build includes it (`GEKKO_YOMI_QT_SHELL=ON`). Pass `-DGEKKO_YOMI_QT_SHELL=OFF` to skip it. Settings that the web UI already covers do not move into Qt as a second source of truth. The shell is a switch for "open the page" and a few local toggles.
+A tray icon that opens a small settings window. The default build includes it (`GEKKO_YOMI_QT_SHELL=ON`). Pass `-DGEKKO_YOMI_QT_SHELL=OFF` to skip it. The icon is a crescent made of plus marks. Settings that the web UI already covers do not move into Qt as a second source of truth. The shell opens the page and edits the buffer knobs and which OCR engines run.
 
 ## Pull requests
 
@@ -110,4 +110,4 @@ cmake --build build
 ./build/gekko-yomi
 ```
 
-That last command is expected to fail until a plugin exists. `GEKKO_YOMI_QT_SHELL` stays off only until the settings window exists. After that, the default is on.
+That last command serves the page and, when a display is set, puts a tray icon up. `-DGEKKO_YOMI_QT_SHELL=OFF` builds the page without the tray.

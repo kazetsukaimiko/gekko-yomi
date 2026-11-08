@@ -341,6 +341,23 @@ void Registry::drop_module(Module& module) {
     drop_adopted(&module.adopted_kanji, &kanji_logs_);
 }
 
+std::vector<std::string> Registry::registered_ocr_ids() const {
+    std::vector<std::string> ids;
+    for (const Module& module : modules_->items) {
+        for (const auto& slot : module.ocr) {
+            if (!slot.id.empty() && std::find(ids.begin(), ids.end(), slot.id) == ids.end()) {
+                ids.push_back(slot.id);
+            }
+        }
+    }
+    for (const auto& engine : ocr_engines_) {
+        if (engine && std::find(ids.begin(), ids.end(), engine->id()) == ids.end()) {
+            ids.push_back(engine->id());
+        }
+    }
+    return ids;
+}
+
 std::vector<std::string> Registry::module_paths() const {
     std::vector<std::string> paths;
     paths.reserve(modules_->items.size());

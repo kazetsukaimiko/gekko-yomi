@@ -3,6 +3,9 @@
 #include "config.hpp"
 #include "http_server.hpp"
 #include "log.hpp"
+#if defined(GEKKO_YOMI_QT_SHELL)
+#include "qt_shell.hpp"
+#endif
 
 #include <CLI/CLI.hpp>
 
@@ -155,7 +158,20 @@ int main(int argc, char** argv) {
     gekko::yomi::logger("app").info("listening on 0.0.0.0:{}", server.port());
     // One line, flushed, so a test can read the URL before the accept loop.
     // Loopback still reaches a 0.0.0.0 socket. Other machines use this host's address.
-    std::cout << "http://127.0.0.1:" << server.port() << std::endl;
+    const std::string page_url = "http://127.0.0.1:" + std::to_string(server.port());
+    std::cout << page_url << std::endl;
+#if defined(GEKKO_YOMI_QT_SHELL)
+    const char* wayland = std::getenv("WAYLAND_DISPLAY");
+    const char* display = std::getenv("DISPLAY");
+    const bool gui = (wayland != nullptr && wayland[0] != '\0') || (display != nullptr && display[0] != '\0');
+    if (gui) {
+        return gekko::yomi::run_qt_shell(argc, argv, &server, &registry, config_path, std::move(config), page_url);
+    }
+    gekko::yomi::logger("app").info("no DISPLAY or WAYLAND_DISPLAY; not opening a tray");
+#else
+    (void)argc;
+    (void)argv;
+#endif
     server.run();
     return 0;
 }

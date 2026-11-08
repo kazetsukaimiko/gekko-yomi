@@ -148,4 +148,54 @@ ConfigResult load_core_config(const std::string& path, bool required) {
     return result;
 }
 
+std::string save_core_config(const std::string& path, const CoreConfig& config) {
+    if (path.empty()) {
+        return "config path is empty";
+    }
+    const std::filesystem::path file(path);
+    if (file.has_parent_path()) {
+        std::error_code mkdir_error;
+        std::filesystem::create_directories(file.parent_path(), mkdir_error);
+        if (mkdir_error) {
+            return "could not create " + file.parent_path().string() + ": " + mkdir_error.message();
+        }
+    }
+
+    std::string body = "{\n  \"buffer\": {\n    \"ttl_scans\": ";
+    body += std::to_string(config.buffer.ttl_scans);
+    body += ",\n    \"positional_invalidation_scans\": ";
+    body += std::to_string(config.buffer.positional_invalidation_scans);
+    body += "\n  }";
+    if (config.ocr_engines) {
+        body += ",\n  \"ocr\": {\n    \"engines\": [";
+        for (std::size_t i = 0; i < config.ocr_engines->size(); ++i) {
+            if (i > 0) {
+                body += ", ";
+            }
+            body += json_quote((*config.ocr_engines)[i]);
+        }
+        body += "]\n  }";
+    }
+    body += "\n}\n";
+
+    const std::filesystem::path temporary = path + ".tmp";
+    {
+        std::ofstream out(temporary, std::ios::binary | std::ios::trunc);
+        if (!out) {
+            return "could not write " + temporary.string();
+        }
+        out << body;
+        if (!out) {
+            return "could not write " + temporary.string();
+        }
+    }
+    std::error_code rename_error;
+    std::filesystem::rename(temporary, file, rename_error);
+    if (rename_error) {
+        std::filesystem::remove(temporary);
+        return "could not replace " + path + ": " + rename_error.message();
+    }
+    return {};
+}
+
 }  // namespace gekko::yomi

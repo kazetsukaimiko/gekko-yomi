@@ -1,6 +1,6 @@
 # Settings roadmap
 
-The scan buffer and the OCR engines are configurable without a rebuild. The Qt window that edits these settings is not in the tree yet. Until it is, `GEKKO_YOMI_QT_SHELL` stays OFF, and turning it on is a configure error. The core library does not link Qt.
+The scan buffer and the OCR engines are configurable without a rebuild. The Qt tray edits `~/.config/gekko-yomi/core.json` and applies that file to the running process between scans. `GEKKO_YOMI_QT_SHELL` defaults to ON. `-DGEKKO_YOMI_QT_SHELL=OFF` is the build without the tray. The core library does not link Qt.
 
 ## Config file
 
@@ -59,6 +59,6 @@ Engine ids today are `meiki` and `ppocr-manga`.
 
 Module plugins keep their own files at `~/.config/gekko-yomi/modules.d/<module_name>.json`. Nothing reads that directory yet. `core.json` stays the core file: buffer and which engines run. A module does not grow keys inside `core.json`.
 
-The Qt tray and settings window edits `core.json` and, later, the module files. It opens the page and exposes the knobs above. When that target exists, `GEKKO_YOMI_QT_SHELL` defaults to ON. `-DGEKKO_YOMI_QT_SHELL=OFF` remains the core-only build. The core still does not link Qt.
+The Qt tray edits `core.json` and, later, the module files. It opens the page and exposes the knobs above. Saving writes the file and applies it on the server thread between scans: the buffer knobs take effect on the next scan, an engine that was turned off is destroyed, and one that was turned on is created from the factory that is already loaded. `-DGEKKO_YOMI_QT_SHELL=OFF` remains the core-only build. The core still does not link Qt.
 
 Not in the file yet, and not moved into Qt as a second copy: the page's poll interval (it stays in `localStorage`), the port (`GEKKO_YOMI_PORT`), overlap, history length, and how many scans a line must win before it is shown. GPU device selection is also later. When inference leaves the CPU, it pins the discrete card and refuses the Raphael iGPU.

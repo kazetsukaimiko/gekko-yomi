@@ -26,7 +26,7 @@ The product roadmap is [roadmap.md](roadmap.md). This file is the map of the run
 2. If `core.json` sets `ocr.engines`, `Registry::limit_ocr_engines` runs with that list. Then `Registry::load()`. Engines named by the list are the ones constructed. Omit the key and every factory that succeeds is constructed. An empty list constructs none. The `.so` files still load either way.
 3. Log each loaded capture, OCR, reading, and dictionary plugin. Load failures were stored and are logged here. They are not printed from inside `dlopen`.
 4. Listen on `0.0.0.0`. `GEKKO_YOMI_PORT` if set, otherwise the first free port from 8765 through 8775.
-5. Write one flushed stdout line, `http://127.0.0.1:PORT`, then `HttpServer::run()`.
+5. Write one flushed stdout line, `http://127.0.0.1:PORT`. Then, when the build includes the Qt shell and `DISPLAY` or `WAYLAND_DISPLAY` is set, the tray runs on this thread and `HttpServer::run()` runs on a side thread. Otherwise `run()` stays on this thread. The tray icon is a crescent of plus marks. Its menu opens that URL, edits `core.json`, and quits. A settings save is applied on the server thread between requests.
 
 A test reads that stdout line to learn the port. Anything else on stdout breaks that. Listen failures go to stderr and `main` returns 1.
 
@@ -126,7 +126,7 @@ Unload of one module, on the server thread, and only when no scan is using that 
 3. Drop the factory pointer.
 4. `dlclose`.
 
-`read_window` calls `begin_scan` on entry and `end_scan` when it returns. The scan joins every OCR thread before that return, and the server handles one request at a time. `unload`, `release_instance`, and `create_instance` fail while a scan is on the stack. They are meant to run on the server thread, between requests. They do not run from inside `recognize`, and there is no queue for a request that arrives from another thread during a scan. A later UI thread would need that queue before it could unload mid-scan.
+`read_window` calls `begin_scan` on entry and `end_scan` when it returns. The scan joins every OCR thread before that return, and the server handles one request at a time. `unload`, `release_instance`, and `create_instance` fail while a scan is on the stack. They are meant to run on the server thread, between requests. They do not run from inside `recognize`. The settings window does not call them itself. It posts the new config, and the server thread applies it before the next accept. There is no queue for an unload that arrives from another thread during a scan.
 
 Disabling an engine is the instance and the runtime, not the library. `ocr.engines` in `core.json` chooses which OCR factories are called at boot. An engine left out is never started, and its worker does not run. The `.so` stays mapped. Turning one off later without leaving the process is `release_instance`. Turning it back on is `create_instance`. That is the operation that frees the ppocr worker. Unmapping the file is `unload`, and process exit.
 
@@ -136,7 +136,7 @@ Disabling an engine is the instance and the runtime, not the library. `ocr.engin
 - `Host::add` for in-process fakes stays.
 - `GEKKO_YOMI_PLUGINS`, `RTLD_NOW`, and `RTLD_LOCAL` stay.
 - The set of plugins is unchanged.
-- The Qt window is still later. When it exists, it calls this host API. It does not `dlopen` itself.
+- The tray does not `dlopen`. It uses the factories the registry already stored. Module files under `modules.d/` are still unread.
 - Nothing watches `plugins/` for a `.so` dropped in while the process is up. `unload` and `load` are the calls that would use.
 
 The core still does not link Qt. Plugin code still reaches the host only through `gekko_yomi_register` and the virtual calls on the interfaces.
