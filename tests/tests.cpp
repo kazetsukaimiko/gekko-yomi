@@ -232,6 +232,9 @@ void test_app_serves_without_plugins() {
         CHECK(response.find("no capture plugin is loaded") != std::string::npos);
         const std::string page = http_exchange(port, "GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
         CHECK(page.find("月読") != std::string::npos);
+        CHECK(page.find("max-aspect-ratio: 1/1") != std::string::npos);
+        CHECK(page.find("max-width: 860px") == std::string::npos);
+        CHECK(page.find("const watching = Boolean(windowSelect.value)") != std::string::npos);
     }
     kill(pid, SIGTERM);
     int status = 0;
