@@ -8,6 +8,8 @@
 
 namespace gekko::yomi {
 
+class Runtime;
+
 // One turn in an OpenAI-compatible chat request.
 // The plugin turns this into the JSON that llama-run (or any other
 // server on that API) expects. The core does not speak HTTP.
@@ -33,6 +35,8 @@ struct ChatResponse {
 class LanguageModel {
 public:
     virtual ~LanguageModel() = default;
+
+    virtual Runtime* runtime() { return nullptr; }
 
     virtual std::string id() const = 0;
     virtual std::string description() const = 0;

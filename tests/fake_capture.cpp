@@ -4,8 +4,6 @@
 #include <string>
 #include <utility>
 
-namespace {
-
 class FakeCapture final : public gekko::yomi::CaptureSource {
 public:
     std::string id() const override { return "fake"; }
@@ -35,9 +33,10 @@ public:
     }
 };
 
-}  // namespace
-
 GEKKO_YOMI_PLUGIN_EXPORT
 void gekko_yomi_register(gekko::yomi::Host* host) {
-    host->add(std::make_unique<FakeCapture>());
+    host->register_capture({"fake", "fixture capture"},
+                           [](std::string*) -> std::unique_ptr<gekko::yomi::CaptureSource> {
+                               return std::make_unique<FakeCapture>();
+                           });
 }

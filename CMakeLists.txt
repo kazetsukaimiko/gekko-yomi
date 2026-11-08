@@ -176,6 +176,15 @@ if(GEKKO_YOMI_BUILD_TESTS)
         PREFIX ""
     )
 
+    add_library(gekko_yomi_probe_plugin SHARED tests/probe_plugin.cpp)
+    target_link_libraries(gekko_yomi_probe_plugin PRIVATE gekko_yomi_core)
+    target_compile_options(gekko_yomi_probe_plugin PRIVATE -Wall -Wextra -Wpedantic)
+    set_target_properties(gekko_yomi_probe_plugin PROPERTIES
+        LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/test-plugins/probe
+        OUTPUT_NAME probe
+        PREFIX ""
+    )
+
     add_library(gekko_yomi_empty_plugin SHARED tests/empty_plugin.cpp)
     target_compile_options(gekko_yomi_empty_plugin PRIVATE -Wall -Wextra -Wpedantic)
     set_target_properties(gekko_yomi_empty_plugin PROPERTIES
@@ -197,6 +206,7 @@ if(GEKKO_YOMI_BUILD_TESTS)
     add_dependencies(gekko-yomi-tests
         gekko_yomi_fake_capture
         gekko_yomi_fake_ocr
+        gekko_yomi_probe_plugin
         gekko_yomi_empty_plugin
         gekko_yomi_capture_kwin
         gekko_yomi_ocr_meiki
@@ -213,6 +223,9 @@ if(GEKKO_YOMI_BUILD_TESTS)
             ${CMAKE_COMMAND} -E env
             "GEKKO_YOMI_APP=$<TARGET_FILE:gekko-yomi>"
             "GEKKO_YOMI_FAKE_DIR=$<TARGET_FILE_DIR:gekko_yomi_fake_capture>"
+            "GEKKO_YOMI_FAKE_OCR_DIR=$<TARGET_FILE_DIR:gekko_yomi_fake_ocr>"
+            "GEKKO_YOMI_FAKE_WORKER=${CMAKE_SOURCE_DIR}/workers/fake_ocr_worker.py"
+            "GEKKO_YOMI_PROBE_DIR=$<TARGET_FILE_DIR:gekko_yomi_probe_plugin>"
             "GEKKO_YOMI_EMPTY_DIR=$<TARGET_FILE_DIR:gekko_yomi_empty_plugin>"
             $<TARGET_FILE:gekko-yomi-tests>
             core

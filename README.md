@@ -2,7 +2,7 @@
 
 Reads Japanese text from a window you pick and shows the original line, furigana, and a short English gloss.
 
-The first milestone is a web page on a local port. An overlay, speech, and a history database are later. See [docs/roadmap.md](docs/roadmap.md). How the process starts, and how plugins load, is in [docs/architecture.md](docs/architecture.md). Unloading one plugin while the process keeps running is not implemented yet. That file is the plan.
+The first milestone is a web page on a local port. An overlay, speech, and a history database are later. See [docs/roadmap.md](docs/roadmap.md). How the process starts, and how plugins load and unload, is in [docs/architecture.md](docs/architecture.md).
 
 This tree builds a core library, a local web page, and plugins. The page still serves when no plugins are loaded and says what is missing. The Qt tray and settings window is not in the tree yet, so `GEKKO_YOMI_QT_SHELL` is off and turning it on is an error. Once that window exists, a normal build includes it, and `-DGEKKO_YOMI_QT_SHELL=OFF` skips it. The core library does not link Qt.
 
@@ -32,4 +32,4 @@ meikiocr is not installed by the build. If `GEKKO_YOMI_PYTHON` is unset, the wor
 
 `plugins/reading_kakasi.so` asks `workers/kakasi_worker.py` for kana. `GEKKO_YOMI_KAKASI_WORKER` overrides that script. The worker needs `pykakasi` in the same interpreter. It does not lemmatize: the dictionary form is the surface you see, so a TSV keyed by that surface will match. A later plugin can fill in conjugation.
 
-`plugins/dictionary_tsv.so` reads `GEKKO_YOMI_DICTIONARY`, a UTF-8 TSV you supply. A line is `form`, a tab, `part of speech`, a tab, and the gloss. Two columns mean the second column is the gloss. Several senses in one gloss are split on ` / `. A line starting with `#` is a comment. The file stays out of git. If the table comes from JMdict, keep the Electronic Dictionary Research and Development Group attribution with it. When the variable is unset the plugin does not register, and the page still shows the reading.
+`plugins/dictionary_tsv.so` reads `GEKKO_YOMI_DICTIONARY`, a UTF-8 TSV you supply. A line is `form`, a tab, `part of speech`, a tab, and the gloss. Two columns mean the second column is the gloss. Several senses in one gloss are split on ` / `. A line starting with `#` is a comment. The file stays out of git. If the table comes from JMdict, keep the Electronic Dictionary Research and Development Group attribution with it. When the variable is unset the factory declines, the library stays loaded, and the page still shows the reading.

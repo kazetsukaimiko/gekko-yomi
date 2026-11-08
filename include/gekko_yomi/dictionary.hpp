@@ -8,6 +8,8 @@
 
 namespace gekko::yomi {
 
+class Runtime;
+
 struct Gloss {
     std::string dictionary_form;
     std::string part_of_speech;
@@ -17,6 +19,8 @@ struct Gloss {
 class Dictionary {
 public:
     virtual ~Dictionary() = default;
+
+    virtual Runtime* runtime() { return nullptr; }
 
     virtual std::string id() const = 0;
     virtual std::string description() const = 0;

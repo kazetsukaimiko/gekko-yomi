@@ -10,7 +10,6 @@
 #include <vector>
 
 namespace gekko::yomi::tsv {
-namespace {
 
 constexpr std::uintmax_t kMaxBytes = 256ull * 1024ull * 1024ull;
 
@@ -109,14 +108,20 @@ private:
     std::unordered_map<std::string, std::vector<Gloss>> entries_;
 };
 
-}  // namespace
 }  // namespace gekko::yomi::tsv
 
 GEKKO_YOMI_PLUGIN_EXPORT
 void gekko_yomi_register(gekko::yomi::Host* host) {
-    const char* path = std::getenv("GEKKO_YOMI_DICTIONARY");
-    if (path == nullptr || path[0] == '\0') {
-        return;
-    }
-    host->add(std::make_unique<gekko::yomi::tsv::TsvDictionary>(path));
+    host->register_dictionary(
+        {"tsv", "Tab-separated dictionary. GEKKO_YOMI_DICTIONARY is the file path."},
+        [](std::string* error) -> std::unique_ptr<gekko::yomi::Dictionary> {
+            const char* path = std::getenv("GEKKO_YOMI_DICTIONARY");
+            if (path == nullptr || path[0] == '\0') {
+                if (error != nullptr) {
+                    *error = "GEKKO_YOMI_DICTIONARY is unset";
+                }
+                return nullptr;
+            }
+            return std::make_unique<gekko::yomi::tsv::TsvDictionary>(path);
+        });
 }
