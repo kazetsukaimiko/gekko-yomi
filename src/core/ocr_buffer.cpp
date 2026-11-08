@@ -58,19 +58,26 @@ std::size_t codepoints(std::string_view text) {
 
 }  // namespace
 
-OcrBuffer::OcrBuffer(OcrBufferOptions options) : options_(options) {
-    if (options_.promote_after < 1) {
-        options_.promote_after = 1;
+static void clamp_buffer_options(OcrBufferOptions* options) {
+    if (options->promote_after < 1) {
+        options->promote_after = 1;
     }
-    if (options_.history < 1) {
-        options_.history = 1;
+    if (options->history < 1) {
+        options->history = 1;
     }
-    if (options_.ttl_scans < 1) {
-        options_.ttl_scans = 1;
+    if (options->ttl_scans < 1) {
+        options->ttl_scans = 1;
     }
-    if (options_.positional_invalidation_scans < 1) {
-        options_.positional_invalidation_scans = 1;
+    if (options->positional_invalidation_scans < 1) {
+        options->positional_invalidation_scans = 1;
     }
+}
+
+OcrBuffer::OcrBuffer(OcrBufferOptions options) : options_(std::move(options)) { clamp_buffer_options(&options_); }
+
+void OcrBuffer::set_options(OcrBufferOptions options) {
+    clamp_buffer_options(&options);
+    options_ = std::move(options);
 }
 
 std::vector<TextRun> OcrBuffer::observe(const std::vector<TextRun>& runs, const std::vector<TextRun>* present) {
@@ -408,13 +415,22 @@ void OcrBuffer::clear() {
     next_order_ = 0;
 }
 
+static OcrBufferOptions consensus_options_from(OcrBufferOptions options) {
+    // The engines already waited promote_after. This step only merges.
+    options.promote_after = 1;
+    return options;
+}
+
 OcrConsensus::OcrConsensus(OcrBufferOptions options)
-    : engine_options_(options), consensus_(([&options] {
-          OcrBufferOptions consensus_options = options;
-          // The engines already waited promote_after. This step only merges.
-          consensus_options.promote_after = 1;
-          return consensus_options;
-      })()) {}
+    : engine_options_(options), consensus_(consensus_options_from(options)) {}
+
+void OcrConsensus::set_options(OcrBufferOptions options) {
+    engine_options_ = options;
+    consensus_.set_options(consensus_options_from(options));
+    for (auto& entry : engines_) {
+        entry.second.set_options(options);
+    }
+}
 
 std::vector<TextRun> OcrConsensus::observe(const std::vector<EngineScan>& engines) {
     std::vector<TextRun> shown_runs;

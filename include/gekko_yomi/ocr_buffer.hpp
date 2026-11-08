@@ -38,6 +38,7 @@ struct OcrBufferOptions {
 class OcrBuffer {
 public:
     explicit OcrBuffer(OcrBufferOptions options = {});
+    void set_options(OcrBufferOptions options);
 
     // runs are the readings to remember. When present is null, those readings
     // also mark the box as seen. When present is set, only those runs mark
@@ -96,6 +97,7 @@ struct EngineScan {
 class OcrConsensus {
 public:
     explicit OcrConsensus(OcrBufferOptions options = {});
+    void set_options(OcrBufferOptions options);
 
     std::vector<TextRun> observe(const std::vector<EngineScan>& engines);
     std::vector<TextRun> shown() const { return consensus_.shown(); }

@@ -4,7 +4,7 @@ Reads Japanese text from a window you pick and shows the original line, furigana
 
 The first milestone is a web page on a local port. An overlay, speech, and a history database are later. See [docs/roadmap.md](docs/roadmap.md). How the process starts, and how plugins load and unload, is in [docs/architecture.md](docs/architecture.md).
 
-This tree builds a core library, a local web page, and plugins. The page still serves when no plugins are loaded and says what is missing. The Qt tray and settings window is not in the tree yet, so `GEKKO_YOMI_QT_SHELL` is off and turning it on is an error. Once that window exists, a normal build includes it, and `-DGEKKO_YOMI_QT_SHELL=OFF` skips it. The core library does not link Qt.
+This tree builds a core library, a local web page, and plugins. The page still serves when no plugins are loaded and says what is missing. A normal build also includes a Qt tray icon and a settings window. `-DGEKKO_YOMI_QT_SHELL=OFF` leaves that out. The core library does not link Qt. The icon is a crescent made of plus marks. The menu opens the page, edits `core.json`, and quits. With no `DISPLAY` or `WAYLAND_DISPLAY`, the process still serves the page and does not open a tray.
 
 ```bash
 cmake -S . -B build -G Ninja

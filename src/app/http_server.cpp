@@ -12,6 +12,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <cerrno>
 #include <cstdint>
 #include <cstdlib>
@@ -177,8 +178,81 @@ bool HttpServer::listen(int port, std::string* error) {
 
 void HttpServer::stop() { stop_.store(true); }
 
+void HttpServer::request_config(CoreConfig config) {
+    std::lock_guard<std::mutex> lock(pending_mu_);
+    pending_ = std::move(config);
+    pending_ready_ = true;
+}
+
+void HttpServer::apply_pending_config() {
+    CoreConfig config;
+    {
+        std::lock_guard<std::mutex> lock(pending_mu_);
+        if (!pending_ready_) {
+            return;
+        }
+        config = std::move(pending_);
+        pending_ready_ = false;
+    }
+
+    memory_.set_options(config.buffer);
+    const std::vector<std::string> known = registry_ == nullptr ? std::vector<std::string>{} : registry_->registered_ocr_ids();
+    auto wanted = [&](const std::string& id) {
+        if (!config.ocr_engines) {
+            return true;
+        }
+        return std::find(config.ocr_engines->begin(), config.ocr_engines->end(), id) != config.ocr_engines->end();
+    };
+    if (registry_ != nullptr) {
+        for (const auto& id : known) {
+            bool live = false;
+            for (const auto& engine : registry_->ocr_engines()) {
+                if (engine && engine->id() == id) {
+                    live = true;
+                    break;
+                }
+            }
+            if (wanted(id) && !live) {
+                const Status created = registry_->create_instance(id);
+                if (!created.ok()) {
+                    logger("app").error("could not start {}: {}", id, created.error);
+                }
+            } else if (!wanted(id) && live) {
+                const Status released = registry_->release_instance(id);
+                if (!released.ok()) {
+                    logger("app").error("could not stop {}: {}", id, released.error);
+                }
+            }
+        }
+        if (config.ocr_engines) {
+            for (const auto& id : *config.ocr_engines) {
+                if (std::find(known.begin(), known.end(), id) == known.end()) {
+                    logger("app").warn("ocr engine {} is not loaded", id);
+                }
+            }
+        }
+    }
+    ocr_engines_ = std::move(config.ocr_engines);
+    if (ocr_engines_) {
+        std::string joined;
+        for (const auto& id : *ocr_engines_) {
+            if (!joined.empty()) {
+                joined += ", ";
+            }
+            joined += id;
+        }
+        logger("app").info("config applied ttl_scans={} positional_invalidation_scans={} engines={}",
+                           config.buffer.ttl_scans, config.buffer.positional_invalidation_scans,
+                           joined.empty() ? "none" : joined);
+    } else {
+        logger("app").info("config applied ttl_scans={} positional_invalidation_scans={} engines=all loaded",
+                           config.buffer.ttl_scans, config.buffer.positional_invalidation_scans);
+    }
+}
+
 void HttpServer::run() {
     while (!stop_.load()) {
+        apply_pending_config();
         pollfd pfd{};
         pfd.fd = listen_fd_;
         pfd.events = POLLIN;

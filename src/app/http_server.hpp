@@ -1,10 +1,13 @@
 #pragma once
 
+#include "config.hpp"
+
 #include "gekko_yomi/frame.hpp"
 #include "gekko_yomi/ocr_buffer.hpp"
 #include "gekko_yomi/registry.hpp"
 
 #include <atomic>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <vector>
@@ -30,10 +33,16 @@ public:
     void run();
     void stop();
 
+    // The Qt thread posts a config. run() applies it on the server thread
+    // between requests: buffer knobs, which engines are called, and
+    // release_instance / create_instance for engines that changed.
+    void request_config(CoreConfig config);
+
     const Frame* last_frame() const { return have_frame_ ? &last_frame_ : nullptr; }
 
 private:
     void handle_client(int client);
+    void apply_pending_config();
 
     Registry* registry_;
     int listen_fd_{-1};
@@ -45,6 +54,9 @@ private:
     OcrConsensus memory_;
     std::string memory_window_;
     std::optional<std::vector<std::string>> ocr_engines_;
+    std::mutex pending_mu_;
+    bool pending_ready_{false};
+    CoreConfig pending_{};
 };
 
 }  // namespace gekko::yomi

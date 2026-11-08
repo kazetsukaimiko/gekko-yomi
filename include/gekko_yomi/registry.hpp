@@ -55,6 +55,10 @@ public:
     // constructs none.
     void limit_ocr_engines(std::vector<std::string> ids);
 
+    // Factory ids, plus any live OCR instance that was add()ed in-process.
+    // Includes engines that were not constructed because of limit_ocr_engines.
+    std::vector<std::string> registered_ocr_ids() const;
+
     const std::vector<std::unique_ptr<CaptureSource>>& capture_sources() const {
         return capture_sources_;
     }
