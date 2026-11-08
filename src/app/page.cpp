@@ -113,7 +113,8 @@ std::string page_html() {
   ruby rt { font-size: 0.45em; color: var(--moss); }
   .gloss { margin: 0.25rem 0 0; color: #5c5144; font-size: 0.92rem; }
   .empty { color: #7a6d5c; font-family: var(--mincho); font-size: 1.2rem; margin-top: 2rem; }
-  @media (max-width: 860px) {
+  /* Side by side only in landscape. A portrait window keeps the grab above the sheet. */
+  @media (max-aspect-ratio: 1/1) {
     main { grid-template-columns: 1fr; height: auto; }
     .stage, .sheet { min-height: 0; }
   }
@@ -221,10 +222,15 @@ async function loadWindows() {
     return;
   }
   const errors = (data.load_errors || []).join(" ");
-  if (data.capture_error) {
-    setStatus(data.capture_error + (errors ? " " + errors : ""));
-  } else if (errors) {
-    setStatus(errors);
+  const watching = Boolean(windowSelect.value);
+  if (!watching) {
+    if (data.capture_error) {
+      setStatus(data.capture_error + (errors ? " " + errors : ""));
+    } else if (errors) {
+      setStatus(errors);
+    }
+  } else if (data.capture_error) {
+    setStatus(data.capture_error);
   }
   const windows = data.windows || [];
   const signature = listSignature(windows);
